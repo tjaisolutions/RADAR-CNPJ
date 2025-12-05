@@ -2,17 +2,14 @@
 import { Company } from '../types';
 
 // Serviço para a API CNPJa
-// CONFIGURAÇÃO OFICIAL (Baseada no suporte técnico CNPJa)
-// Doc: https://cnpja.com/api/reference
+// DOCUMENTAÇÃO OFICIAL: https://api.cnpja.com
+// ENDPOINT: /office
 
 const PROXY_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
   ? '' // No localhost usamos o proxy do Vite
   : '/infosimples-proxy'; // No Render usamos a rota direta
 
-// 1. Domínio correto: api.cnpja.com
-// 2. Endpoint correto: /office (Pesquisa Avançada)
-// 3. Sem prefixo /api
-const ENDPOINT = 'https://api.cnpja.com/office';
+const BASE_DOMAIN = 'https://api.cnpja.com';
 
 export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]> => {
   if (!apiKey) throw new Error("Chave de API do CNPJa não fornecida.");
@@ -24,13 +21,14 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
 
   console.log(`[CNPJa] Buscando empresas abertas a partir de: ${formattedDate}`);
 
+  // Configuração ESTRITA conforme suporte
+  const endpoint = '/office';
+  const queryParams = `?founded.gte=${formattedDate}`;
+  const targetUrl = `${BASE_DOMAIN}${endpoint}${queryParams}`;
+
+  console.log(`[CNPJa] URL Alvo: ${targetUrl}`);
+
   try {
-    const queryParams = `?founded.gte=${formattedDate}`;
-    const targetUrl = `${ENDPOINT}${queryParams}`;
-
-    console.log(`[CNPJa] URL Alvo: ${targetUrl}`);
-
-    // Usamos o endpoint de proxy genérico do backend para evitar CORS
     const response = await fetch(`${PROXY_URL}/infosimples-proxy`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -38,9 +36,7 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
         url: targetUrl,
         method: 'GET',
         headers: {
-          // CORREÇÃO CRÍTICA DO SUPORTE:
-          // Não usar "Bearer ". Apenas a chave direta.
-          'Authorization': apiKey, 
+          'Authorization': apiKey, // Sem Bearer, apenas a chave crua
           'Accept': 'application/json'
         }
       })
@@ -51,36 +47,29 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
     }
 
     if (response.status === 401 || response.status === 403) {
-      throw new Error("Acesso Negado (401/403). Verifique se a Chave de API está correta e ativa.");
+      throw new Error("Acesso Negado (401/403). Verifique se a Chave de API está correta.");
     }
 
     if (!response.ok) {
       const errText = await response.text();
-      let cleanError = `Erro ${response.status}`;
+      console.error(`[CNPJa Error Body]:`, errText); // Loga o corpo do erro para debug
       
       if (response.status === 404) {
-         cleanError = `Endpoint da API não encontrado (404). URL tentada: ${targetUrl}`;
-      } else if (errText.includes('<!DOCTYPE') || errText.includes('<html')) {
-         cleanError = `Erro no Servidor do CNPJa (${response.status}). Possível erro de endpoint ou parâmetros.`;
-      } else {
-         cleanError = errText.substring(0, 200);
+         throw new Error(`Endpoint não encontrado (404). A API pode ter mudado ou a chave não tem acesso a este recurso. URL: ${targetUrl}`);
       }
-      throw new Error(cleanError);
+      
+      throw new Error(`Erro na API (${response.status}): ${errText.substring(0, 100)}`);
     }
 
     const json = await response.json();
+    console.log('[CNPJa Success]:', json);
     
-    // CNPJa retorna array direto ou objeto com propriedade 'items'/'data'
-    // A documentação sugere paginação, então verificamos a estrutura
-    const list = Array.isArray(json) ? json : (json.data || json.items || []);
-
-    if (list.length === 0) {
-      console.warn("CNPJa retornou lista vazia. Pode não haver empresas novas processadas ainda para esta data.");
-    }
+    // Tenta adaptar diferentes formatos de resposta
+    const list = Array.isArray(json) ? json : (json.data || json.items || json.offices || []);
 
     return list.map((item: any) => ({
-      id: `cnpja-${item.id || item.taxId}`,
-      cnpj: item.taxId || item.cnpj || '00000000000000',
+      id: `cnpja-${item.id || item.taxId || Math.random()}`,
+      cnpj: item.taxId || item.cnpj || '00.000.000/0000-00',
       razaoSocial: item.company?.name || item.legalName || item.name || 'Razão Social Não Informada',
       nomeFantasia: item.alias || item.tradeName || item.company?.name || '',
       dataAbertura: item.founded || item.foundedDate || formattedDate,
@@ -97,7 +86,7 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
     }));
 
   } catch (error: any) {
-    console.error("Erro CNPJa Service:", error);
+    console.error(`Erro fatal no serviço CNPJa:`, error);
     throw error;
   }
 };
