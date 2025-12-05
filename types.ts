@@ -1,3 +1,4 @@
+
 export interface Company {
   id: string;
   cnpj: string;
@@ -16,7 +17,7 @@ export interface Company {
   // UI helper props
   isContacted?: boolean;
   notes?: string;
-  source?: 'simulation' | 'manual' | 'api';
+  source?: 'simulation' | 'manual' | 'api' | 'infosimples' | 'cnpj_ws' | 'cnpj_ws_comercial' | 'cnpja';
 }
 
 export interface FilterState {
@@ -29,7 +30,7 @@ export enum LeadStatus {
   NEW = 'Novo',
   CONTACTED = 'Contatado',
   QUALIFIED = 'Qualificado',
-  DISCARDED = 'Descartado'
+  LOST = 'Perdido'
 }
 
 export interface AnalysisResult {
@@ -38,10 +39,8 @@ export interface AnalysisResult {
   potentialPainPoints: string[];
 }
 
-export type DataSourceMode = 'simulation' | 'manual' | 'live_api';
-
 export interface AppConfig {
-  mode: DataSourceMode;
-  refreshInterval: number; // seconds
+  mode: 'simulation' | 'manual' | 'live_api' | 'infosimples' | 'cnpj_ws_comercial' | 'cnpja';
+  refreshInterval: number;
   apiKey: string;
 }
