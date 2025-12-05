@@ -1,0 +1,5 @@
+{
+  "name": "CNPJ Radar & Intelligence",
+  "description": "A real-time dashboard system simulating the automatic monitoring of newly opened companies (CNPJs) in Brazil, featuring AI-powered lead enrichment and sales strategy generation.",
+  "requestFramePermissions": []
+}
