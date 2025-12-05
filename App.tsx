@@ -1,15 +1,18 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Company, AnalysisResult, AppConfig } from './types';
 import { analyzeLead } from './services/geminiService';
 import { generateMockCompany } from './services/mockDataService';
-import { fetchNewCompanies } from './services/cnpjBizService';
+import { fetchInfosimplesCompanies } from './services/infosimplesService';
+import { fetchNewCompaniesCnpjWs } from './services/cnpjWsService';
+import { fetchNewCompaniesCnpja } from './services/cnpjaService'; // Nova importação
 import StatsCards from './components/StatsCards';
 import CompanyList from './components/CompanyList';
 import AnalysisModal from './components/AnalysisModal';
 import SettingsModal from './components/SettingsModal';
 import ManualEntryModal from './components/ManualEntryModal';
 import ExternalSources from './components/ExternalSources';
-import { Radar, Play, Pause, RefreshCw, Settings, Download, Keyboard, FlaskConical, Plus, Globe, History, CheckCircle2, ListFilter, AlertTriangle, ShieldAlert, ExternalLink, Monitor, Apple, Terminal, Server } from 'lucide-react';
+import { Radar, Play, Pause, Settings, Download, FlaskConical, Keyboard, Building2, History, ListFilter, ShieldAlert, Filter, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Persistence Init
@@ -20,16 +23,15 @@ const App: React.FC = () => {
 
   const [companies, setCompanies] = useState<Company[]>(loadSavedCompanies());
   const [activeTab, setActiveTab] = useState<'today' | 'history'>('today');
-  const [isMonitoring, setIsMonitoring] = useState(false); 
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [isLoadingApi, setIsLoadingApi] = useState(false); // Estado de loading para API
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [errorType, setErrorType] = useState<string | null>(null); // 'BACKEND' | 'AUTH' | 'OTHER'
   
   // Configuration State
   const [config, setConfig] = useState<AppConfig>({
-    mode: 'simulation', 
+    mode: 'simulation',
     refreshInterval: 3,
-    apiKey: 'RIPn5BPaXoC3PQ1IspYconpFdZyJtV8u1SHOsMLygQdS00T5j02f8c5f50ib' // Default key provided by user
+    apiKey: ''
   });
   
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -40,83 +42,71 @@ const App: React.FC = () => {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isLoadingApi, setIsLoadingApi] = useState(false);
 
   // Auto-scroll ref
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Save to LocalStorage whenever companies change
   useEffect(() => {
     localStorage.setItem('cnpj_radar_companies', JSON.stringify(companies));
   }, [companies]);
 
-  // Data Feed Effect
+  // Data Feed Effect (Simulation Only)
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
 
-    if (isMonitoring) {
-      if (config.mode === 'simulation') {
-        setErrorMsg(null);
-        setErrorType(null);
-        // Simulation Mode
-        interval = setInterval(() => {
-          const newCompany = generateMockCompany();
-          newCompany.source = 'simulation';
-          setCompanies(prev => [newCompany, ...prev]);
-          setLastUpdate(new Date());
-        }, config.refreshInterval * 1000);
-      } 
-      else if (config.mode === 'live_api') {
-        // Live API Logic (Run once on toggle, or verify daily)
-        const lastFetchKey = `last_api_fetch_${new Date().toDateString()}`;
-        const alreadyFetched = localStorage.getItem(lastFetchKey);
-        setErrorMsg(null);
-        setErrorType(null);
-
-        if (!alreadyFetched && !isLoadingApi) {
-          setIsLoadingApi(true);
-          // Fetch D-1 (Yesterday)
-          fetchNewCompanies(config.apiKey)
-            .then(newLeads => {
-               if (newLeads.length > 0) {
-                 setCompanies(prev => {
-                   const existingIds = new Set(prev.map(c => c.cnpj));
-                   const uniqueNew = newLeads.filter(c => !existingIds.has(c.cnpj));
-                   return [...uniqueNew, ...prev];
-                 });
-                 alert(`API: ${newLeads.length} novas empresas encontradas abertas ontem!`);
-                 localStorage.setItem(lastFetchKey, 'true');
-               } else {
-                 setErrorMsg("Sucesso: A API conectou, mas não retornou nenhuma empresa para a data de ontem.");
-               }
-               setLastUpdate(new Date());
-            })
-            .catch(err => {
-              console.error(err);
-              if (err.message === 'BACKEND_OFFLINE') {
-                setErrorMsg("Servidor Backend offline ou inacessível.");
-                setErrorType('BACKEND');
-              } else if (err.message === 'AUTH_ERROR') {
-                setErrorMsg("Chave de API Inválida ou Plano não permite Busca.");
-                setErrorType('AUTH');
-              } else {
-                setErrorMsg(`Erro na API: ${err.message}`);
-                setErrorType('OTHER');
-              }
-            })
-            .finally(() => {
-              setIsLoadingApi(false);
-              setIsMonitoring(false); // Stop monitoring after fetch to avoid loop
-            });
-        } else if (alreadyFetched) {
-           setIsMonitoring(false);
-           alert("Você já buscou os dados de ontem. Para forçar nova busca, limpe o histórico (botão de lixeira).");
-        }
-      }
+    if (isMonitoring && config.mode === 'simulation') {
+      setErrorMsg(null);
+      interval = setInterval(() => {
+        const newCompany = generateMockCompany();
+        newCompany.source = 'simulation';
+        setCompanies(prev => [newCompany, ...prev]);
+      }, config.refreshInterval * 1000);
+    } 
+    else if (isMonitoring && (config.mode === 'live_api' || config.mode === 'infosimples' || config.mode === 'cnpj_ws_comercial' || config.mode === 'cnpja')) {
+      // Para APIs reais, a busca é via botão manual para economizar créditos.
+      setIsMonitoring(false);
     }
 
     return () => clearInterval(interval);
-  }, [isMonitoring, config.refreshInterval, config.mode, config.apiKey, isLoadingApi]);
+  }, [isMonitoring, config.refreshInterval, config.mode]);
+
+  // Função para Disparar Busca nas APIs Reais
+  const handleFetchApiData = async () => {
+    setIsLoadingApi(true);
+    setErrorMsg(null);
+
+    try {
+      let newLeads: Company[] = [];
+
+      if (config.mode === 'cnpja') {
+         newLeads = await fetchNewCompaniesCnpja(config.apiKey);
+      } else if (config.mode === 'infosimples') {
+         newLeads = await fetchInfosimplesCompanies(config.apiKey);
+      } else if (config.mode === 'cnpj_ws_comercial') {
+         newLeads = await fetchNewCompaniesCnpjWs(config.apiKey);
+      } else {
+         alert("Modo inválido para busca de lista. Configure a API nas opções.");
+         return;
+      }
+
+      if (newLeads.length > 0) {
+        // Filtra duplicatas
+        const uniqueLeads = newLeads.filter(lead => 
+          !companies.some(existing => existing.cnpj === lead.cnpj)
+        );
+        setCompanies(prev => [...uniqueLeads, ...prev]);
+        alert(`${uniqueLeads.length} novas empresas encontradas!`);
+      } else {
+        alert("Nenhuma empresa nova encontrada para a data de ontem (ou sua chave não tem permissão).");
+      }
+
+    } catch (error: any) {
+      setErrorMsg(error.message);
+      console.error(error);
+    } finally {
+      setIsLoadingApi(false);
+    }
+  };
 
   const handleAnalyze = useCallback(async (company: Company) => {
     setSelectedCompany(company);
@@ -135,7 +125,10 @@ const App: React.FC = () => {
   }, []);
 
   const handleAddManualCompany = (company: Company) => {
-    company.source = 'manual';
+    if (companies.some(c => c.cnpj === company.cnpj)) {
+      alert("Esta empresa já está na lista.");
+      return;
+    }
     setCompanies(prev => [company, ...prev]);
   };
 
@@ -156,17 +149,25 @@ const App: React.FC = () => {
   const getStatusBadge = () => {
     switch (config.mode) {
       case 'simulation':
-        return <span className="text-[10px] bg-blue-500/20 text-blue-800 px-2 py-0.5 rounded border border-blue-500/30 flex items-center gap-1 font-bold"><FlaskConical size={10} /> AMBIENTE SIMULADO</span>;
+        return <span className="text-[10px] bg-blue-500/20 text-blue-800 px-2 py-0.5 rounded border border-blue-500/30 flex items-center gap-1 font-bold"><FlaskConical size={10} /> SIMULAÇÃO</span>;
+      case 'cnpja':
+        return <span className="text-[10px] bg-emerald-500/20 text-emerald-800 px-2 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1 font-bold"><Radar size={10} /> CNPJa API</span>;
       case 'manual':
-        return <span className="text-[10px] bg-emerald-500/20 text-emerald-800 px-2 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1 font-bold"><Keyboard size={10} /> MANUAL FREE</span>;
+        return <span className="text-[10px] bg-gray-500/20 text-gray-800 px-2 py-0.5 rounded border border-gray-500/30 flex items-center gap-1 font-bold"><Keyboard size={10} /> MANUAL</span>;
       case 'live_api':
-        return <span className="text-[10px] bg-amber-500/20 text-amber-800 px-2 py-0.5 rounded border border-amber-500/30 flex items-center gap-1 font-bold"><Globe size={10} /> API CONECTADA</span>;
+        return <span className="text-[10px] bg-green-500/20 text-green-800 px-2 py-0.5 rounded border border-green-500/30 flex items-center gap-1 font-bold"><Building2 size={10} /> RECEITA WS</span>;
+      case 'infosimples':
+        return <span className="text-[10px] bg-purple-500/20 text-purple-800 px-2 py-0.5 rounded border border-purple-500/30 flex items-center gap-1 font-bold"><ListFilter size={10} /> INFOSIMPLES</span>;
+      case 'cnpj_ws_comercial':
+        return <span className="text-[10px] bg-indigo-500/20 text-indigo-800 px-2 py-0.5 rounded border border-indigo-500/30 flex items-center gap-1 font-bold"><Filter size={10} /> CNPJ.WS PREMIUM</span>;
+      default:
+        return null;
     }
   };
 
   const todayDateStr = new Date().toISOString().split('T')[0];
   const filteredCompanies = activeTab === 'today' 
-    ? companies.filter(c => c.dataAbertura.startsWith(todayDateStr) || (config.mode === 'live_api' && !c.isContacted)) 
+    ? companies.filter(c => c.dataAbertura.startsWith(todayDateStr) || (config.mode !== 'simulation' && !c.isContacted)) 
     : companies;
 
   return (
@@ -175,8 +176,8 @@ const App: React.FC = () => {
       <header className="bg-slate-900 text-white shadow-lg sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-lg transition-colors ${config.mode === 'manual' ? 'bg-emerald-600' : config.mode === 'live_api' ? 'bg-amber-600' : 'bg-blue-600'}`}>
-              <Radar size={20} className={`text-white ${isMonitoring ? 'animate-spin-slow' : ''}`} />
+            <div className={`p-2 rounded-lg transition-colors bg-slate-800`}>
+              <Radar size={20} className={`text-white ${isMonitoring || isLoadingApi ? 'animate-spin-slow' : ''}`} />
             </div>
             <div>
               <h1 className="font-bold text-lg tracking-tight">CNPJ Radar</h1>
@@ -217,118 +218,90 @@ const App: React.FC = () => {
                   onClick={() => setActiveTab('history')}
                   className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all ${activeTab === 'history' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                 >
-                  <History size={14} /> Histórico Geral
+                  <History size={14} /> Histórico Completo
                 </button>
              </div>
+             
+             {/* Simulation Toggle */}
+             {config.mode === 'simulation' && (
+                <button 
+                  onClick={() => setIsMonitoring(!isMonitoring)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all border ${isMonitoring ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-slate-700 border-slate-200'}`}
+                >
+                  {isMonitoring ? <Pause size={14} /> : <Play size={14} />}
+                  {isMonitoring ? 'Pausar' : 'Simular Entrada'}
+                </button>
+             )}
 
-            {isLoadingApi && (
-                <span className="text-xs text-amber-600 font-medium animate-pulse flex items-center gap-1">
-                  <RefreshCw size={10} className="animate-spin"/> Buscando na Receita Federal...
-                </span>
-            )}
+             {/* API Trigger Button */}
+             {(config.mode === 'infosimples' || config.mode === 'cnpj_ws_comercial' || config.mode === 'cnpja') && (
+                <button 
+                  onClick={handleFetchApiData}
+                  disabled={isLoadingApi}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all border bg-indigo-600 text-white hover:bg-indigo-700 border-indigo-600`}
+                >
+                  {isLoadingApi ? <Loader2 size={14} className="animate-spin" /> : <ListFilter size={14} />}
+                  Buscar Novos (D-1)
+                </button>
+             )}
           </div>
-          
-          <div className="flex gap-2 w-full md:w-auto">
-            {config.mode !== 'manual' ? (
-              <button 
-                onClick={() => setIsMonitoring(!isMonitoring)}
-                className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                  isMonitoring 
-                  ? 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100' 
-                  : 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
-                }`}
-              >
-                {isMonitoring ? <><Pause size={16} /> Parar</> : <><Play size={16} /> {config.mode === 'live_api' ? 'Buscar D-1 (Auto)' : 'Iniciar Simulação'}</>}
-              </button>
-            ) : (
-              <button 
-                onClick={() => setIsManualModalOpen(true)}
-                className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all bg-emerald-600 text-white hover:bg-emerald-700 shadow-md shadow-emerald-600/20"
-              >
-                <Plus size={16} /> Adicionar Empresa
-              </button>
-            )}
-            
-            <button 
-              onClick={() => {
-                if(confirm('Tem certeza? Isso apagará o histórico local.')) {
-                  setCompanies([]);
-                  localStorage.removeItem('cnpj_radar_companies');
-                  localStorage.removeItem(`last_api_fetch_${new Date().toDateString()}`);
-                  setErrorMsg(null);
-                  setErrorType(null);
-                }
-              }}
-              className="px-3 py-2 bg-white text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50"
-              title="Limpar Histórico"
-            >
-              <RefreshCw size={16} />
-            </button>
 
-              <button 
-              onClick={handleExport}
-              disabled={companies.length === 0}
-              className="px-3 py-2 bg-white text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50"
-              title="Exportar CSV"
-            >
-              <Download size={16} />
-            </button>
+          <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+             <button
+               onClick={() => setIsManualModalOpen(true)}
+               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-md flex items-center gap-2 transition-colors shadow-sm"
+             >
+               <Keyboard size={14} /> Adicionar / Validar
+             </button>
+             <button 
+               onClick={handleExport}
+               className="p-1.5 text-slate-400 hover:text-slate-600 transition-colors"
+               title="Exportar CSV"
+             >
+               <Download size={18} />
+             </button>
           </div>
         </div>
 
+        <StatsCards companies={companies} />
+
         {errorMsg && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex flex-col gap-2 animate-fade-in">
-             <div className="flex items-start gap-2">
-                <ShieldAlert className="shrink-0 mt-0.5" size={18} />
-                <div className="text-sm font-medium leading-relaxed">{errorMsg}</div>
-             </div>
-            
-            {errorType === 'BACKEND' && (
-              <div className="ml-7 mt-2 p-4 bg-white rounded-lg border border-red-100 text-sm text-slate-600 shadow-sm">
-                <div className="flex items-center gap-2 text-slate-800 font-bold mb-2">
-                  <Server size={16} /> Backend Offline
-                </div>
-                <p className="mb-2">Para que a API funcione localmente, você precisa rodar o arquivo server.js:</p>
-                <ol className="list-decimal ml-4 space-y-2 text-xs font-mono bg-slate-100 p-3 rounded">
-                  <li>Abra o terminal.</li>
-                  <li>Execute: <strong className="text-indigo-600">node server.js</strong></li>
-                  <li>Recarregue a página.</li>
-                </ol>
-                <p className="mt-2 text-xs text-slate-500">Se você já estiver no Render, verifique os Logs do servidor.</p>
-              </div>
-            )}
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-center gap-3 animate-fade-in">
+            <ShieldAlert size={20} />
+            <p className="text-sm">{errorMsg}</p>
           </div>
         )}
-
-        {config.mode === 'manual' && <ExternalSources />}
-        {companies.length > 0 && <StatsCards companies={companies} />}
         
+        {/* Helper Links Section */}
+        <ExternalSources />
+
         <CompanyList 
           companies={filteredCompanies} 
           onAnalyze={handleAnalyze} 
-          isLoadingAnalysis={isAnalyzing} 
+          isLoadingAnalysis={isAnalyzing}
         />
       </main>
 
-      <AnalysisModal 
-        isOpen={isAnalysisModalOpen}
-        onClose={() => setIsAnalysisModalOpen(false)}
-        company={selectedCompany}
-        analysis={analysis}
-        isLoading={isAnalyzing}
-      />
-
+      {/* Modals */}
       <SettingsModal 
-        isOpen={isSettingsOpen}
+        isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)}
         config={config}
         onSave={setConfig}
       />
-
+      
       <ManualEntryModal 
-        isOpen={isManualModalOpen}
-        onClose={() => setIsManualModalOpen(false)}
+        isOpen={isManualModalOpen} 
+        onClose={() => setIsManualModalOpen(false)} 
         onAdd={handleAddManualCompany}
+      />
+
+      <AnalysisModal 
+        isOpen={isAnalysisModalOpen} 
+        onClose={() => setIsAnalysisModalOpen(false)}
+        company={selectedCompany}
+        analysis={analysis}
+        isLoading={isAnalyzing}
       />
     </div>
   );
