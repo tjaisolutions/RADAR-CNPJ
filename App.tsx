@@ -3,16 +3,14 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Company, AnalysisResult, AppConfig } from './types';
 import { analyzeLead } from './services/geminiService';
 import { generateMockCompany } from './services/mockDataService';
-import { fetchInfosimplesCompanies } from './services/infosimplesService';
-import { fetchNewCompaniesCnpjWs } from './services/cnpjWsService';
-import { fetchNewCompaniesCnpja } from './services/cnpjaService'; // Nova importação
+import { fetchNewCompaniesCnpja } from './services/cnpjaService';
 import StatsCards from './components/StatsCards';
 import CompanyList from './components/CompanyList';
 import AnalysisModal from './components/AnalysisModal';
 import SettingsModal from './components/SettingsModal';
 import ManualEntryModal from './components/ManualEntryModal';
 import ExternalSources from './components/ExternalSources';
-import { Radar, Play, Pause, Settings, Download, FlaskConical, Keyboard, Building2, History, ListFilter, ShieldAlert, Filter, Loader2 } from 'lucide-react';
+import { Radar, Play, Pause, Settings, Download, FlaskConical, Keyboard, History, ListFilter, ShieldAlert, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Persistence Init
@@ -62,7 +60,7 @@ const App: React.FC = () => {
         setCompanies(prev => [newCompany, ...prev]);
       }, config.refreshInterval * 1000);
     } 
-    else if (isMonitoring && (config.mode === 'live_api' || config.mode === 'infosimples' || config.mode === 'cnpj_ws_comercial' || config.mode === 'cnpja')) {
+    else if (isMonitoring && config.mode === 'cnpja') {
       // Para APIs reais, a busca é via botão manual para economizar créditos.
       setIsMonitoring(false);
     }
@@ -80,12 +78,8 @@ const App: React.FC = () => {
 
       if (config.mode === 'cnpja') {
          newLeads = await fetchNewCompaniesCnpja(config.apiKey);
-      } else if (config.mode === 'infosimples') {
-         newLeads = await fetchInfosimplesCompanies(config.apiKey);
-      } else if (config.mode === 'cnpj_ws_comercial') {
-         newLeads = await fetchNewCompaniesCnpjWs(config.apiKey);
       } else {
-         alert("Modo inválido para busca de lista. Configure a API nas opções.");
+         alert("Modo inválido. Configure a API nas opções.");
          return;
       }
 
@@ -154,12 +148,6 @@ const App: React.FC = () => {
         return <span className="text-[10px] bg-emerald-500/20 text-emerald-800 px-2 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1 font-bold"><Radar size={10} /> CNPJa API</span>;
       case 'manual':
         return <span className="text-[10px] bg-gray-500/20 text-gray-800 px-2 py-0.5 rounded border border-gray-500/30 flex items-center gap-1 font-bold"><Keyboard size={10} /> MANUAL</span>;
-      case 'live_api':
-        return <span className="text-[10px] bg-green-500/20 text-green-800 px-2 py-0.5 rounded border border-green-500/30 flex items-center gap-1 font-bold"><Building2 size={10} /> RECEITA WS</span>;
-      case 'infosimples':
-        return <span className="text-[10px] bg-purple-500/20 text-purple-800 px-2 py-0.5 rounded border border-purple-500/30 flex items-center gap-1 font-bold"><ListFilter size={10} /> INFOSIMPLES</span>;
-      case 'cnpj_ws_comercial':
-        return <span className="text-[10px] bg-indigo-500/20 text-indigo-800 px-2 py-0.5 rounded border border-indigo-500/30 flex items-center gap-1 font-bold"><Filter size={10} /> CNPJ.WS PREMIUM</span>;
       default:
         return null;
     }
@@ -234,14 +222,14 @@ const App: React.FC = () => {
              )}
 
              {/* API Trigger Button */}
-             {(config.mode === 'infosimples' || config.mode === 'cnpj_ws_comercial' || config.mode === 'cnpja') && (
+             {(config.mode === 'cnpja') && (
                 <button 
                   onClick={handleFetchApiData}
                   disabled={isLoadingApi}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all border bg-indigo-600 text-white hover:bg-indigo-700 border-indigo-600`}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all border bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600`}
                 >
                   {isLoadingApi ? <Loader2 size={14} className="animate-spin" /> : <ListFilter size={14} />}
-                  Buscar Novos (D-1)
+                  Buscar Novos (CNPJa)
                 </button>
              )}
           </div>
