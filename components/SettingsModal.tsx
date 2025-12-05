@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect } from 'react';
 import { AppConfig } from '../types';
-import { X, Server, Save, Keyboard, FlaskConical, Globe, Key } from 'lucide-react';
+import { X, Server, Save, Keyboard, FlaskConical, Globe, Key, Database, Filter, Radar } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -15,6 +16,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, config, 
   useEffect(() => {
     setLocalConfig(config);
   }, [config, isOpen]);
+
+  // Se o usuário selecionar CNPJa e não tiver chave, sugerimos a chave padrão fornecida
+  const handleModeChange = (mode: AppConfig['mode']) => {
+    let newKey = localConfig.apiKey;
+    if (mode === 'cnpja' && (!newKey || newKey.length < 10)) {
+        newKey = '50cd7f37-a8a7-4076-b180-520a12dfdc3c-608f7b7f-2488-44b9-81f5-017cf47d154b';
+    }
+    setLocalConfig({ ...localConfig, mode, apiKey: newKey });
+  };
 
   if (!isOpen) return null;
 
@@ -39,11 +49,37 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, config, 
 
         <form onSubmit={handleSubmit} className="p-6 space-y-6">
           
-          {/* Mode Selection */}
-          <div className="grid grid-cols-3 gap-3">
+          {/* Mode Selection Grid */}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => handleModeChange('cnpja')}
+              className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
+                localConfig.mode === 'cnpja' 
+                  ? 'border-emerald-600 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-200' 
+                  : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+              }`}
+            >
+              <Radar size={20} />
+              <span className="text-xs font-bold text-center">CNPJa (Recomendado)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleModeChange('cnpj_ws_comercial')}
+              className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
+                localConfig.mode === 'cnpj_ws_comercial' 
+                  ? 'border-indigo-600 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-200' 
+                  : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+              }`}
+            >
+              <Filter size={20} />
+              <span className="text-xs font-bold text-center">CNPJ.ws (Premium)</span>
+            </button>
+
              <button
               type="button"
-              onClick={() => setLocalConfig({...localConfig, mode: 'simulation'})}
+              onClick={() => handleModeChange('simulation')}
               className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
                 localConfig.mode === 'simulation' 
                   ? 'border-blue-600 bg-blue-50 text-blue-700 ring-2 ring-blue-200' 
@@ -51,58 +87,81 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, config, 
               }`}
             >
               <FlaskConical size={20} />
-              <span className="text-xs font-bold text-center">Simulação</span>
+              <span className="text-xs font-bold text-center">Simulação (Grátis)</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setLocalConfig({...localConfig, mode: 'live_api'})}
+              onClick={() => handleModeChange('infosimples')}
               className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
-                localConfig.mode === 'live_api' 
-                  ? 'border-amber-600 bg-amber-50 text-amber-700 ring-2 ring-amber-200' 
+                localConfig.mode === 'infosimples' 
+                  ? 'border-purple-600 bg-purple-50 text-purple-700 ring-2 ring-purple-200' 
                   : 'border-slate-200 hover:bg-slate-50 text-slate-600'
               }`}
             >
-              <Globe size={20} />
-              <span className="text-xs font-bold text-center">API Real (CNPJ.biz)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setLocalConfig({...localConfig, mode: 'manual'})}
-              className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
-                localConfig.mode === 'manual' 
-                  ? 'border-emerald-600 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-200' 
-                  : 'border-slate-200 hover:bg-slate-50 text-slate-600'
-              }`}
-            >
-              <Keyboard size={20} />
-              <span className="text-xs font-bold text-center">Manual</span>
+              <Database size={20} />
+              <span className="text-xs font-bold text-center">Infosimples</span>
             </button>
           </div>
 
           {/* Configs por Modo */}
+          {localConfig.mode === 'cnpja' && (
+             <div className="space-y-4 animate-fade-in">
+               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-emerald-900 text-sm">
+                 <p className="font-semibold mb-1">Integração CNPJa.com</p>
+                 <p>Utiliza o endpoint de filtro <code>founded.gte</code> para encontrar empresas novas.</p>
+               </div>
+               
+               <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                    <Key size={12}/> Chave de API
+                  </label>
+                  <input 
+                    type="text" 
+                    value={localConfig.apiKey}
+                    onChange={(e) => setLocalConfig({...localConfig, apiKey: e.target.value})}
+                    placeholder="Cole sua chave aqui..."
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-600 focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+               </div>
+             </div>
+          )}
+
           {localConfig.mode === 'simulation' && (
              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-blue-800 text-sm animate-fade-in">
                 <p className="font-semibold mb-1">Modo de Demonstração</p>
-                <p>O sistema irá gerar dados fictícios realistas automaticamente para fins de teste.</p>
+                <p>O sistema irá gerar dados fictícios realistas automaticamente.</p>
              </div>
           )}
 
-          {localConfig.mode === 'manual' && (
-             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-emerald-800 text-sm animate-fade-in">
-               <p className="font-semibold mb-1">Modo Gratuito</p>
-               <p>Insira CNPJs manualmente e use as ferramentas de investigação (OSINT) com fontes externas gratuitas.</p>
-             </div>
-          )}
-
-          {localConfig.mode === 'live_api' && (
+          {localConfig.mode === 'cnpj_ws_comercial' && (
              <div className="space-y-4 animate-fade-in">
-               <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-900 text-sm">
-                 <p className="font-semibold mb-1">Integração CNPJ.biz</p>
-                 <p>O sistema buscará automaticamente empresas abertas <strong>ontem</strong>.</p>
+               <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 text-indigo-900 text-sm">
+                 <p className="font-semibold mb-1">CNPJ.ws - Plano Comercial</p>
+                 <p>Permite <strong>listar empresas abertas ontem</strong> (Endpoint /companies).</p>
                </div>
                
+               <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                    <Key size={12}/> API Token (Comercial)
+                  </label>
+                  <input 
+                    type="password" 
+                    value={localConfig.apiKey}
+                    onChange={(e) => setLocalConfig({...localConfig, apiKey: e.target.value})}
+                    placeholder="Cole seu token comercial aqui..."
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+               </div>
+             </div>
+          )}
+
+          {localConfig.mode === 'infosimples' && (
+             <div className="space-y-4 animate-fade-in">
+               <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 text-purple-900 text-sm">
+                 <p className="font-semibold mb-1">Integração Infosimples</p>
+                 <p>Requer contrato que inclua o robô de <strong>Pesquisa</strong>.</p>
+               </div>
                <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
                     <Key size={12}/> API Token
@@ -111,10 +170,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, config, 
                     type="password" 
                     value={localConfig.apiKey}
                     onChange={(e) => setLocalConfig({...localConfig, apiKey: e.target.value})}
-                    placeholder="Cole sua chave aqui..."
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-600 focus:ring-2 focus:ring-amber-500 outline-none"
+                    placeholder="Cole o token..."
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-600 focus:ring-2 focus:ring-purple-500 outline-none"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1">Sua chave é salva apenas no seu navegador.</p>
                </div>
              </div>
           )}
