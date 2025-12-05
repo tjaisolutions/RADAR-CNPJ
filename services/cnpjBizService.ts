@@ -21,8 +21,9 @@ export const fetchNewCompanies = async (apiKey: string = DEFAULT_KEY, date?: Dat
   console.log(`[System] Buscando novos CNPJs (${formattedDate}) via Backend...`);
 
   try {
-    // Rota Search
-    const url = `${BASE_URL}/v2/search?open_date=${formattedDate}`;
+    // TENTATIVA DE CORREÇÃO: Mudamos de /v2/search para /v1/search
+    // Muitas APIs usam v1 ou sem versão quando a v2 está instável
+    const url = `${BASE_URL}/v1/search?open_date=${formattedDate}`;
     
     const response = await fetch(url, { 
       method: 'GET', 
@@ -34,7 +35,12 @@ export const fetchNewCompanies = async (apiKey: string = DEFAULT_KEY, date?: Dat
 
     if (!response.ok) {
        const status = response.status;
+       // Tenta ler o erro do servidor para exibir na tela
+       const errorBody = await response.text();
+       console.error(`[API Error Body]: ${errorBody}`);
+
        if (status === 401 || status === 403) throw new Error('AUTH_ERROR');
+       if (status === 404) throw new Error('API_ENDPOINT_NOT_FOUND'); // Novo erro específico
        if (status === 502) throw new Error('BAD_GATEWAY');
        throw new Error(`API_ERROR_${status}`);
     }
@@ -87,7 +93,7 @@ export const enrichCompanyDetails = async (cnpj: string, apiKey: string = DEFAUL
   const BASE_URL = getBaseUrl();
 
   try {
-    const url = `${BASE_URL}/v2/cnpj/${cleanCnpj}`;
+    const url = `${BASE_URL}/v1/cnpj/${cleanCnpj}`; // Também mudado para v1
     const response = await fetch(url, { headers: { 'Authorization': `Bearer ${apiKey}` } });
     
     if (response.ok) {
