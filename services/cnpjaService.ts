@@ -2,14 +2,14 @@
 import { Company } from '../types';
 
 // Serviço para a API CNPJa
-// Endpoint ajustado para o subdomínio de API padrão
+// Endpoint ajustado para o padrão REST de empresas
 
 const PROXY_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
   ? '' // No localhost usamos o proxy do Vite
   : '/infosimples-proxy'; // No Render usamos a rota direta
 
-// Ajuste para o subdomínio de API, evitando a página HTML do site principal
-const ENDPOINT = 'https://api.cnpja.com/office';
+// Ajuste: A rota de API geralmente é /companies ou /v1/companies, não /office (que é o painel)
+const ENDPOINT = 'https://api.cnpja.com/companies';
 
 export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]> => {
   if (!apiKey) throw new Error("Chave de API do CNPJa não fornecida.");
@@ -25,6 +25,8 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
     const queryParams = `?founded.gte=${formattedDate}`;
     const targetUrl = `${ENDPOINT}${queryParams}`;
 
+    console.log(`[CNPJa] URL Alvo: ${targetUrl}`);
+
     // Usamos o endpoint de proxy genérico do backend
     const response = await fetch(`${PROXY_URL}/infosimples-proxy`, {
       method: 'POST',
@@ -35,14 +37,13 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Accept': 'application/json',
-          // REMOVIDO: Referer e Origin para evitar conflito com autenticação Bearer
           'User-Agent': 'CNPJRadar/1.0 (Integration)'
         }
       })
     });
 
     if (response.status === 429) {
-      throw new Error("Limite de requisições excedido (Erro 429). Aguarde alguns minutos ou verifique seu plano no CNPJa.");
+      throw new Error("Limite de requisições excedido (Erro 429). Aguarde alguns minutos.");
     }
 
     if (response.status === 401 || response.status === 403) {
@@ -52,11 +53,13 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
     if (!response.ok) {
       const errText = await response.text();
       let cleanError = `Erro ${response.status}`;
-      // Tratamento para quando a API devolve HTML de erro em vez de JSON
-      if (errText.includes('<!DOCTYPE') || errText.includes('<html')) {
-         cleanError = `Erro no Servidor do CNPJa (${response.status}). Endpoint ou parâmetros inválidos.`;
+      
+      if (response.status === 404) {
+         cleanError = `Endpoint da API não encontrado (404). URL tentada: ${targetUrl}`;
+      } else if (errText.includes('<!DOCTYPE') || errText.includes('<html')) {
+         cleanError = `Erro no Servidor do CNPJa (${response.status}). Possível erro de endpoint ou parâmetros.`;
       } else {
-         cleanError = errText.substring(0, 200); // Limita tamanho do erro
+         cleanError = errText.substring(0, 200);
       }
       throw new Error(cleanError);
     }
@@ -64,9 +67,6 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
     const json = await response.json();
     
     // CNPJa geralmente retorna array direto ou objeto com propriedade 'items'/'data'
-    // Adicionamos log para debug caso a estrutura mude
-    // console.log("Response CNPJa:", json);
-
     const list = Array.isArray(json) ? json : (json.data || json.items || []);
 
     if (list.length === 0) {
