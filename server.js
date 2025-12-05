@@ -20,27 +20,25 @@ app.use(express.static(distPath));
 // Rota específica para CNPJa/Infosimples (POST)
 // O frontend envia { url: '...', method: 'POST', data: ... }
 app.post('/infosimples-proxy', (clientReq, clientRes) => {
-  const { url: targetUrlStr, method, data } = clientReq.body;
+  const { url: targetUrlStr, method, headers: customHeaders, data } = clientReq.body;
 
   if (!targetUrlStr) {
     return clientRes.status(400).json({ error: 'URL alvo não fornecida' });
   }
 
   const targetUrl = url.parse(targetUrlStr);
-  const postData = JSON.stringify(data);
+  const postData = data ? JSON.stringify(data) : null;
 
   const options = {
     hostname: targetUrl.hostname,
     port: 443,
     path: targetUrl.path,
-    method: method || 'POST',
+    method: method || 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(postData),
-      'User-Agent': 'Mozilla/5.0 (Compatible; CNPJ-Radar/1.0)',
-      // Importante: Algumas APIs bloqueiam se não tiver User-Agent válido
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      ...customHeaders // Mescla os headers enviados pelo frontend (Authorization, Referer, etc)
     },
-    // Bypass SSL se necessário (cuidado em produção, mas útil para debug de APIs novas)
     rejectUnauthorized: false
   };
 
@@ -54,13 +52,11 @@ app.post('/infosimples-proxy', (clientReq, clientRes) => {
 
   proxyReq.on('error', (e) => {
     console.error(`[CNPJa Proxy Error] ${e.message}`);
-    // Tratamento robusto para evitar crash
     if (!clientRes.headersSent) {
        clientRes.status(502).json({ error: 'Falha no Proxy CNPJa', details: e.message });
     }
   });
 
-  // Timeout para evitar travamentos
   proxyReq.on('timeout', () => {
       proxyReq.destroy();
       if (!clientRes.headersSent) {
@@ -68,7 +64,9 @@ app.post('/infosimples-proxy', (clientReq, clientRes) => {
       }
   });
 
-  proxyReq.write(postData);
+  if (postData) {
+    proxyReq.write(postData);
+  }
   proxyReq.end();
 });
 
