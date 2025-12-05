@@ -2,14 +2,15 @@
 import { Company } from '../types';
 
 // Serviço para a API CNPJa
-// Endpoint ajustado para o padrão REST de empresas
+// Endpoint ajustado para o padrão do domínio principal
 
 const PROXY_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
   ? '' // No localhost usamos o proxy do Vite
   : '/infosimples-proxy'; // No Render usamos a rota direta
 
-// Ajuste: A rota de API geralmente é /companies ou /v1/companies, não /office (que é o painel)
-const ENDPOINT = 'https://api.cnpja.com/companies';
+// Ajuste: A API provavelmente reside no mesmo domínio, sob o prefixo /api
+// Baseado na URL do painel: https://cnpja.com/office
+const ENDPOINT = 'https://cnpja.com/api/office';
 
 export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]> => {
   if (!apiKey) throw new Error("Chave de API do CNPJa não fornecida.");
@@ -37,7 +38,7 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Accept': 'application/json',
-          'User-Agent': 'CNPJRadar/1.0 (Integration)'
+          'User-Agent': 'CNPJRadar/1.0'
         }
       })
     });
