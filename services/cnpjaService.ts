@@ -2,15 +2,17 @@
 import { Company } from '../types';
 
 // Serviço para a API CNPJa
-// Endpoint ajustado para o padrão do domínio principal
+// CONFIGURAÇÃO OFICIAL (Baseada no suporte técnico CNPJa)
+// Doc: https://cnpja.com/api/reference
 
 const PROXY_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
   ? '' // No localhost usamos o proxy do Vite
   : '/infosimples-proxy'; // No Render usamos a rota direta
 
-// Ajuste: A API provavelmente reside no mesmo domínio, sob o prefixo /api
-// Baseado na URL do painel: https://cnpja.com/office
-const ENDPOINT = 'https://cnpja.com/api/office';
+// 1. Domínio correto: api.cnpja.com
+// 2. Endpoint correto: /office (Pesquisa Avançada)
+// 3. Sem prefixo /api
+const ENDPOINT = 'https://api.cnpja.com/office';
 
 export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]> => {
   if (!apiKey) throw new Error("Chave de API do CNPJa não fornecida.");
@@ -28,7 +30,7 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
 
     console.log(`[CNPJa] URL Alvo: ${targetUrl}`);
 
-    // Usamos o endpoint de proxy genérico do backend
+    // Usamos o endpoint de proxy genérico do backend para evitar CORS
     const response = await fetch(`${PROXY_URL}/infosimples-proxy`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -36,9 +38,10 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
         url: targetUrl,
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Accept': 'application/json',
-          'User-Agent': 'CNPJRadar/1.0'
+          // CORREÇÃO CRÍTICA DO SUPORTE:
+          // Não usar "Bearer ". Apenas a chave direta.
+          'Authorization': apiKey, 
+          'Accept': 'application/json'
         }
       })
     });
@@ -48,7 +51,7 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
     }
 
     if (response.status === 401 || response.status === 403) {
-      throw new Error("Acesso Negado (401/403). Verifique se a Chave de API está correta.");
+      throw new Error("Acesso Negado (401/403). Verifique se a Chave de API está correta e ativa.");
     }
 
     if (!response.ok) {
@@ -67,7 +70,8 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
 
     const json = await response.json();
     
-    // CNPJa geralmente retorna array direto ou objeto com propriedade 'items'/'data'
+    // CNPJa retorna array direto ou objeto com propriedade 'items'/'data'
+    // A documentação sugere paginação, então verificamos a estrutura
     const list = Array.isArray(json) ? json : (json.data || json.items || []);
 
     if (list.length === 0) {
@@ -75,10 +79,10 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
     }
 
     return list.map((item: any) => ({
-      id: `cnpja-${item.id || item.cnpj}`,
-      cnpj: item.cnpj || item.taxId || '00000000000000',
-      razaoSocial: item.company?.name || item.name || item.legalName || 'Razão Social Não Informada',
-      nomeFantasia: item.alias || item.tradeName || item.company?.name || item.name || '',
+      id: `cnpja-${item.id || item.taxId}`,
+      cnpj: item.taxId || item.cnpj || '00000000000000',
+      razaoSocial: item.company?.name || item.legalName || item.name || 'Razão Social Não Informada',
+      nomeFantasia: item.alias || item.tradeName || item.company?.name || '',
       dataAbertura: item.founded || item.foundedDate || formattedDate,
       cnaePrincipal: item.mainActivity?.code || item.cnae || '0000-0/00',
       cnaeDescricao: item.mainActivity?.text || item.cnaeDescription || 'Atividade na API',
