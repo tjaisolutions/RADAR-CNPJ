@@ -1,298 +1,166 @@
+import React, { useState, useEffect } from 'react';
+import { Company, SearchHistoryItem } from './types';
+import { fetchCompaniesByDate } from './services/api';
+import ResultsTable from './components/ResultsTable';
+import HistorySidebar from './components/HistorySidebar';
+import { Menu, Database, Loader2, AlertCircle, Radar, Activity, WifiOff } from 'lucide-react';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Company, AnalysisResult, AppConfig } from './types';
-import { analyzeLead } from './services/geminiService';
-import { generateMockCompany } from './services/mockDataService';
-import { fetchNewCompaniesCnpja } from './services/cnpjaService';
-import StatsCards from './components/StatsCards';
-import CompanyList from './components/CompanyList';
-import AnalysisModal from './components/AnalysisModal';
-import SettingsModal from './components/SettingsModal';
-import ManualEntryModal from './components/ManualEntryModal';
-import ExternalSources from './components/ExternalSources';
-import { Radar, Play, Pause, Settings, Download, FlaskConical, Keyboard, History, ListFilter, ShieldAlert, Loader2 } from 'lucide-react';
+function App() {
+  const [searchDate, setSearchDate] = useState<string>('');
+  const [currentResults, setCurrentResults] = useState<Company[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState<SearchHistoryItem[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-const App: React.FC = () => {
-  // Persistence Init
-  const loadSavedCompanies = (): Company[] => {
-    const saved = localStorage.getItem('cnpj_radar_companies');
-    return saved ? JSON.parse(saved) : [];
-  };
-
-  const [companies, setCompanies] = useState<Company[]>(loadSavedCompanies());
-  const [activeTab, setActiveTab] = useState<'today' | 'history'>('today');
-  const [isMonitoring, setIsMonitoring] = useState(false);
-  const [isLoadingApi, setIsLoadingApi] = useState(false); // Estado de loading para API
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
-  // Configuration State
-  const [config, setConfig] = useState<AppConfig>({
-    mode: 'simulation',
-    refreshInterval: 3,
-    apiKey: ''
-  });
-  
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isManualModalOpen, setIsManualModalOpen] = useState(false);
-  
-  // Analysis Modal State
-  const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-
-  // Auto-scroll ref
-  const scrollRef = useRef<HTMLDivElement>(null);
-
+  // Load history from localStorage on mount
   useEffect(() => {
-    localStorage.setItem('cnpj_radar_companies', JSON.stringify(companies));
-  }, [companies]);
-
-  // Data Feed Effect (Simulation Only)
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-
-    if (isMonitoring && config.mode === 'simulation') {
-      setErrorMsg(null);
-      interval = setInterval(() => {
-        const newCompany = generateMockCompany();
-        newCompany.source = 'simulation';
-        setCompanies(prev => [newCompany, ...prev]);
-      }, config.refreshInterval * 1000);
-    } 
-    else if (isMonitoring && config.mode === 'cnpja') {
-      // Para APIs reais, a busca é via botão manual para economizar créditos.
-      setIsMonitoring(false);
-    }
-
-    return () => clearInterval(interval);
-  }, [isMonitoring, config.refreshInterval, config.mode]);
-
-  // Função para Disparar Busca nas APIs Reais
-  const handleFetchApiData = async () => {
-    setIsLoadingApi(true);
-    setErrorMsg(null);
-
-    try {
-      let newLeads: Company[] = [];
-
-      if (config.mode === 'cnpja') {
-         newLeads = await fetchNewCompaniesCnpja(config.apiKey);
-      } else {
-         alert("Modo inválido. Configure a API nas opções.");
-         return;
+    const savedHistory = localStorage.getItem('cnpj_search_history');
+    if (savedHistory) {
+      try {
+        setHistory(JSON.parse(savedHistory));
+      } catch (e) {
+        console.error("Failed to parse history", e);
       }
-
-      if (newLeads.length > 0) {
-        // Filtra duplicatas
-        const uniqueLeads = newLeads.filter(lead => 
-          !companies.some(existing => existing.cnpj === lead.cnpj)
-        );
-        setCompanies(prev => [...uniqueLeads, ...prev]);
-        alert(`${uniqueLeads.length} novas empresas encontradas!`);
-      } else {
-        alert("Nenhuma empresa nova encontrada para a data de ontem (ou sua chave não tem permissão).");
-      }
-
-    } catch (error: any) {
-      setErrorMsg(error.message);
-      console.error(error);
-    } finally {
-      setIsLoadingApi(false);
-    }
-  };
-
-  const handleAnalyze = useCallback(async (company: Company) => {
-    setSelectedCompany(company);
-    setIsAnalysisModalOpen(true);
-    setIsAnalyzing(true);
-    setAnalysis(null);
-
-    try {
-      const result = await analyzeLead(company);
-      setAnalysis(result);
-    } catch (error) {
-      console.error("Analysis failed", error);
-    } finally {
-      setIsAnalyzing(false);
     }
   }, []);
 
-  const handleAddManualCompany = (company: Company) => {
-    if (companies.some(c => c.cnpj === company.cnpj)) {
-      alert("Esta empresa já está na lista.");
-      return;
-    }
-    setCompanies(prev => [company, ...prev]);
-  };
+  // Save history to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('cnpj_search_history', JSON.stringify(history));
+  }, [history]);
 
-  const handleExport = () => {
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + "CNPJ,Razao Social,CNAE,UF,Cidade,Email,Telefone,Status\n"
-      + companies.map(c => `${c.cnpj},"${c.razaoSocial}","${c.cnaeDescricao}",${c.uf},${c.municipio},${c.email || ''},${c.telefone || ''},${c.isContacted ? 'Contactado' : 'Novo'}`).join("\n");
+  const handleSearch = async () => {
+    const today = new Date();
+    // Format YYYY-MM-DD for API
+    const dateStr = today.toISOString().split('T')[0];
     
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `leads_cnpjs_${new Date().toISOString()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+    setSearchDate(dateStr);
+    setLoading(true);
+    setError(null);
+    setCurrentResults([]);
 
-  const getStatusBadge = () => {
-    switch (config.mode) {
-      case 'simulation':
-        return <span className="text-[10px] bg-blue-500/20 text-blue-800 px-2 py-0.5 rounded border border-blue-500/30 flex items-center gap-1 font-bold"><FlaskConical size={10} /> SIMULAÇÃO</span>;
-      case 'cnpja':
-        return <span className="text-[10px] bg-emerald-500/20 text-emerald-800 px-2 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1 font-bold"><Radar size={10} /> CNPJa API</span>;
-      case 'manual':
-        return <span className="text-[10px] bg-gray-500/20 text-gray-800 px-2 py-0.5 rounded border border-gray-500/30 flex items-center gap-1 font-bold"><Keyboard size={10} /> MANUAL</span>;
-      default:
-        return null;
+    try {
+      const results = await fetchCompaniesByDate(dateStr);
+      
+      setCurrentResults(results);
+
+      // Add to history only if we found something or if it was a successful query
+      const newHistoryItem: SearchHistoryItem = {
+        id: crypto.randomUUID(),
+        dateQueried: dateStr,
+        timestamp: Date.now(),
+        resultCount: results.length,
+        results: results
+      };
+
+      setHistory(prev => [newHistoryItem, ...prev]);
+
+    } catch (err: any) {
+      console.error("App Error:", err);
+      setError(err.message || "Ocorreu um erro desconhecido ao buscar os dados.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const todayDateStr = new Date().toISOString().split('T')[0];
-  const filteredCompanies = activeTab === 'today' 
-    ? companies.filter(c => c.dataAbertura.startsWith(todayDateStr) || (config.mode !== 'simulation' && !c.isContacted)) 
-    : companies;
+  const loadFromHistory = (item: SearchHistoryItem) => {
+    setSearchDate(item.dateQueried);
+    setCurrentResults(item.results);
+    if (window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+  };
+
+  const clearHistory = () => {
+    if (confirm("Tem certeza que deseja limpar todo o histórico?")) {
+      setHistory([]);
+      localStorage.removeItem('cnpj_search_history');
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
-      {/* Navbar */}
-      <header className="bg-slate-900 text-white shadow-lg sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-lg transition-colors bg-slate-800`}>
-              <Radar size={20} className={`text-white ${isMonitoring || isLoadingApi ? 'animate-spin-slow' : ''}`} />
-            </div>
-            <div>
-              <h1 className="font-bold text-lg tracking-tight">CNPJ Radar</h1>
-              <div className="flex items-center gap-2">
-                 <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Monitoramento de Mercado</p>
-                 {getStatusBadge()}
-              </div>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => setIsSettingsOpen(true)}
-              className="p-2 rounded-lg transition relative flex items-center gap-2 hover:bg-slate-800 text-slate-400"
-              title="Configurações"
-            >
-              <Settings size={20} />
-            </button>
-          </div>
-        </div>
-      </header>
+    <div className="flex h-screen overflow-hidden bg-slate-100">
+      {/* Sidebar */}
+      <HistorySidebar 
+        history={history} 
+        onSelect={loadFromHistory} 
+        onClear={clearHistory}
+        isOpen={sidebarOpen}
+      />
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 space-y-6" ref={scrollRef}>
-        
-        {/* Controls Toolbar */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm animate-fade-in">
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <header className="bg-white border-b border-slate-200 p-4 flex items-center justify-between shadow-sm z-10">
           <div className="flex items-center gap-3">
-             {/* Tabs */}
-             <div className="flex bg-slate-100 p-1 rounded-lg">
-                <button 
-                  onClick={() => setActiveTab('today')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all ${activeTab === 'today' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                  <ListFilter size={14} /> Novos / Pendentes
-                </button>
-                <button 
-                  onClick={() => setActiveTab('history')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all ${activeTab === 'history' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                  <History size={14} /> Histórico Completo
-                </button>
-             </div>
-             
-             {/* Simulation Toggle */}
-             {config.mode === 'simulation' && (
-                <button 
-                  onClick={() => setIsMonitoring(!isMonitoring)}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all border ${isMonitoring ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-slate-700 border-slate-200'}`}
-                >
-                  {isMonitoring ? <Pause size={14} /> : <Play size={14} />}
-                  {isMonitoring ? 'Pausar' : 'Simular Entrada'}
-                </button>
-             )}
+            <button 
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2 text-blue-700">
+              <Database className="w-6 h-6" />
+              <h1 className="text-xl font-bold tracking-tight">CNPJ Hunter Pro</h1>
+            </div>
+          </div>
+        </header>
 
-             {/* API Trigger Button */}
-             {(config.mode === 'cnpja') && (
-                <button 
-                  onClick={handleFetchApiData}
-                  disabled={isLoadingApi}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-2 transition-all border bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600`}
-                >
-                  {isLoadingApi ? <Loader2 size={14} className="animate-spin" /> : <ListFilter size={14} />}
-                  Buscar Novos (CNPJa)
-                </button>
-             )}
+        {/* Search Area */}
+        <div className="p-6 space-y-6 overflow-y-auto h-full">
+          <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200 text-center relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-blue-500 opacity-50"></div>
+            
+            <div className="max-w-2xl mx-auto relative z-10">
+              <div className="inline-flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider mb-4 border border-blue-100">
+                <Activity className="w-3.5 h-3.5" />
+                Sistema em Tempo Real
+              </div>
+              
+              <h2 className="text-3xl font-bold text-slate-800 mb-3">Monitoramento de Novos CNPJs</h2>
+              <p className="text-slate-500 mb-8 text-lg">
+                Identifique instantaneamente empresas abertas hoje na Receita Federal.
+              </p>
+              
+              <button
+                onClick={handleSearch}
+                disabled={loading}
+                className="group relative w-full sm:w-auto min-w-[280px] px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold text-lg rounded-full flex items-center justify-center gap-3 transition-all disabled:opacity-70 disabled:cursor-not-allowed shadow-xl shadow-blue-600/30 hover:shadow-blue-600/40 hover:scale-[1.02] active:scale-[0.98]"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                    <span className="animate-pulse">Sincronizando Base de Dados...</span>
+                  </>
+                ) : (
+                  <>
+                    <Radar className="w-6 h-6 group-hover:rotate-12 transition-transform" />
+                    <span>Rastrear Aberturas Agora</span>
+                  </>
+                )}
+              </button>
+            </div>
+            
+            {error && (
+              <div className="mt-6 max-w-lg mx-auto p-4 bg-red-50 text-red-800 rounded-lg flex items-start gap-3 text-sm border border-red-200 shadow-sm animate-in fade-in slide-in-from-top-2 text-left">
+                <WifiOff className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
+                <div className="flex-1">
+                  <p className="font-bold mb-1">Falha na conexão:</p>
+                  <p>{error}</p>
+                </div>
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center gap-2 w-full md:w-auto justify-end">
-             <button
-               onClick={() => setIsManualModalOpen(true)}
-               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-md flex items-center gap-2 transition-colors shadow-sm"
-             >
-               <Keyboard size={14} /> Adicionar / Validar
-             </button>
-             <button 
-               onClick={handleExport}
-               className="p-1.5 text-slate-400 hover:text-slate-600 transition-colors"
-               title="Exportar CSV"
-             >
-               <Download size={18} />
-             </button>
+          {/* Results Area */}
+          <div className="flex-1 min-h-[400px]">
+            <ResultsTable data={currentResults} date={searchDate} />
           </div>
         </div>
-
-        <StatsCards companies={companies} />
-
-        {errorMsg && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-center gap-3 animate-fade-in">
-            <ShieldAlert size={20} />
-            <p className="text-sm">{errorMsg}</p>
-          </div>
-        )}
-        
-        {/* Helper Links Section */}
-        <ExternalSources />
-
-        <CompanyList 
-          companies={filteredCompanies} 
-          onAnalyze={handleAnalyze} 
-          isLoadingAnalysis={isAnalyzing}
-        />
-      </main>
-
-      {/* Modals */}
-      <SettingsModal 
-        isOpen={isSettingsOpen} 
-        onClose={() => setIsSettingsOpen(false)}
-        config={config}
-        onSave={setConfig}
-      />
-      
-      <ManualEntryModal 
-        isOpen={isManualModalOpen} 
-        onClose={() => setIsManualModalOpen(false)} 
-        onAdd={handleAddManualCompany}
-      />
-
-      <AnalysisModal 
-        isOpen={isAnalysisModalOpen} 
-        onClose={() => setIsAnalysisModalOpen(false)}
-        company={selectedCompany}
-        analysis={analysis}
-        isLoading={isAnalyzing}
-      />
+      </div>
     </div>
   );
-};
+}
 
 export default App;
