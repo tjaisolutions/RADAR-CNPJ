@@ -36,16 +36,18 @@ app.post('/infosimples-proxy', (clientReq, clientRes) => {
     method: method || 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      ...customHeaders // Mescla os headers enviados pelo frontend (Authorization, Referer, etc)
+      'User-Agent': 'CNPJRadar/BackendProxy',
+      ...customHeaders // Mescla os headers enviados pelo frontend
     },
-    rejectUnauthorized: false
+    rejectUnauthorized: false,
+    timeout: 60000 // Aumentado para 60s
   };
 
   const proxyReq = https.request(options, (proxyRes) => {
     let responseBody = '';
     proxyRes.on('data', (chunk) => { responseBody += chunk; });
     proxyRes.on('end', () => {
+      // Repassa o status original da API (ex: 429, 200, 500)
       clientRes.status(proxyRes.statusCode).send(responseBody);
     });
   });
@@ -60,7 +62,7 @@ app.post('/infosimples-proxy', (clientReq, clientRes) => {
   proxyReq.on('timeout', () => {
       proxyReq.destroy();
       if (!clientRes.headersSent) {
-        clientRes.status(504).json({ error: 'Timeout ao conectar na API externa' });
+        clientRes.status(504).json({ error: 'Timeout ao conectar na API externa (60s excedido)' });
       }
   });
 
