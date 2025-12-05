@@ -17,7 +17,7 @@ export interface Company {
   // UI helper props
   isContacted?: boolean;
   notes?: string;
-  source?: 'simulation' | 'manual' | 'api' | 'infosimples' | 'cnpj_ws' | 'cnpj_ws_comercial' | 'cnpja';
+  source?: 'simulation' | 'manual' | 'cnpja' | 'api' | 'infosimples' | 'cnpj_ws_comercial';
 }
 
 export interface FilterState {
@@ -40,7 +40,7 @@ export interface AnalysisResult {
 }
 
 export interface AppConfig {
-  mode: 'simulation' | 'manual' | 'live_api' | 'infosimples' | 'cnpj_ws_comercial' | 'cnpja';
+  mode: 'simulation' | 'manual' | 'cnpja';
   refreshInterval: number;
   apiKey: string;
 }
