@@ -2,13 +2,13 @@
 import { Company } from '../types';
 
 // Serviço para a API CNPJa
-// Endpoint descoberto: https://cnpja.com/office?founded.gte=...
+// Endpoint base ajustado para evitar erro 500
 
 const PROXY_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
-  ? 'http://localhost:4000' 
-  : ''; 
+  ? '' // No localhost usamos o proxy do Vite configurado no vite.config.ts
+  : '/infosimples-proxy'; // No Render usamos a rota direta
 
-// Base URL inferida da documentação e uso do frontend deles
+// Vamos tentar usar a URL que geralmente responde a JSON com filtros
 const ENDPOINT = 'https://cnpja.com/api/office';
 
 export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]> => {
@@ -22,14 +22,12 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
   console.log(`[CNPJa] Buscando empresas abertas a partir de: ${formattedDate}`);
 
   try {
-    // Monta a Query String com o filtro que você descobriu
-    // founded.gte = Data de fundação maior ou igual a...
     const queryParams = `?founded.gte=${formattedDate}`;
     const targetUrl = `${ENDPOINT}${queryParams}`;
 
-    // Usamos o endpoint de proxy genérico do backend para fazer o tunnel da requisição
-    // Isso evita problemas de CORS no navegador
-    const response = await fetch(`${PROXY_URL}/infosimples-proxy`, {
+    // Usamos o endpoint de proxy genérico do backend
+    // IMPORTANTE: Adicionamos headers de Referer e Origin para evitar bloqueio (Erro 500)
+    const response = await fetch(`/infosimples-proxy`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -37,7 +35,10 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'Referer': 'https://cnpja.com/',
+          'Origin': 'https://cnpja.com',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
       })
     });
@@ -47,14 +48,20 @@ export const fetchNewCompaniesCnpja = async (apiKey: string): Promise<Company[]>
     }
 
     if (!response.ok) {
+      // Tentar ler o erro, mas se for HTML (comum em 500), retornar msg genérica limpa
       const errText = await response.text();
-      throw new Error(`Erro CNPJa: ${response.status} - ${errText}`);
+      let cleanError = `Erro ${response.status}`;
+      if (errText.includes('<!DOCTYPE')) {
+         cleanError = "Erro Interno na API do CNPJa (500). O servidor deles recusou a conexão.";
+      } else {
+         cleanError = errText;
+      }
+      throw new Error(cleanError);
     }
 
     const json = await response.json();
     
-    // O retorno pode ser um array direto ou um objeto paginado. 
-    // Vamos tentar detectar a lista.
+    // Tratamento flexível da resposta (Array direto ou Objeto com data/items)
     const list = Array.isArray(json) ? json : (json.data || json.items || []);
 
     if (list.length === 0) {
