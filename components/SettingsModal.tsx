@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { AppConfig } from '../types';
-import { X, Server, Save, Keyboard, FlaskConical, Globe, Key, Database, Filter, Radar } from 'lucide-react';
+import { X, Server, Save, Keyboard, FlaskConical, Key, Radar } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -61,20 +61,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, config, 
               }`}
             >
               <Radar size={20} />
-              <span className="text-xs font-bold text-center">CNPJa (Recomendado)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleModeChange('cnpj_ws_comercial')}
-              className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
-                localConfig.mode === 'cnpj_ws_comercial' 
-                  ? 'border-indigo-600 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-200' 
-                  : 'border-slate-200 hover:bg-slate-50 text-slate-600'
-              }`}
-            >
-              <Filter size={20} />
-              <span className="text-xs font-bold text-center">CNPJ.ws (Premium)</span>
+              <span className="text-xs font-bold text-center">CNPJa (Ativo)</span>
             </button>
 
              <button
@@ -87,20 +74,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, config, 
               }`}
             >
               <FlaskConical size={20} />
-              <span className="text-xs font-bold text-center">Simulação (Grátis)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleModeChange('infosimples')}
-              className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
-                localConfig.mode === 'infosimples' 
-                  ? 'border-purple-600 bg-purple-50 text-purple-700 ring-2 ring-purple-200' 
-                  : 'border-slate-200 hover:bg-slate-50 text-slate-600'
-              }`}
-            >
-              <Database size={20} />
-              <span className="text-xs font-bold text-center">Infosimples</span>
+              <span className="text-xs font-bold text-center">Simulação (Teste)</span>
             </button>
           </div>
 
@@ -131,49 +105,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, config, 
              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-blue-800 text-sm animate-fade-in">
                 <p className="font-semibold mb-1">Modo de Demonstração</p>
                 <p>O sistema irá gerar dados fictícios realistas automaticamente.</p>
-             </div>
-          )}
-
-          {localConfig.mode === 'cnpj_ws_comercial' && (
-             <div className="space-y-4 animate-fade-in">
-               <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 text-indigo-900 text-sm">
-                 <p className="font-semibold mb-1">CNPJ.ws - Plano Comercial</p>
-                 <p>Permite <strong>listar empresas abertas ontem</strong> (Endpoint /companies).</p>
-               </div>
-               
-               <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
-                    <Key size={12}/> API Token (Comercial)
-                  </label>
-                  <input 
-                    type="password" 
-                    value={localConfig.apiKey}
-                    onChange={(e) => setLocalConfig({...localConfig, apiKey: e.target.value})}
-                    placeholder="Cole seu token comercial aqui..."
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
-               </div>
-             </div>
-          )}
-
-          {localConfig.mode === 'infosimples' && (
-             <div className="space-y-4 animate-fade-in">
-               <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 text-purple-900 text-sm">
-                 <p className="font-semibold mb-1">Integração Infosimples</p>
-                 <p>Requer contrato que inclua o robô de <strong>Pesquisa</strong>.</p>
-               </div>
-               <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
-                    <Key size={12}/> API Token
-                  </label>
-                  <input 
-                    type="password" 
-                    value={localConfig.apiKey}
-                    onChange={(e) => setLocalConfig({...localConfig, apiKey: e.target.value})}
-                    placeholder="Cole o token..."
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-600 focus:ring-2 focus:ring-purple-500 outline-none"
-                  />
-               </div>
              </div>
           )}
 
