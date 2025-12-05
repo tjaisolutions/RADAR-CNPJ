@@ -1,92 +1,71 @@
-
 const express = require('express');
-const https = require('https');
 const cors = require('cors');
 const path = require('path');
-const url = require('url');
 
 const app = express();
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 3000;
+
+// Chave da API (No Render, idealmente use Variáveis de Ambiente)
+const API_KEY = "50cd7f37-a8a7-4076-b180-520a12dfdc3c-608f7b7f-2488-44b9-81f5-017cf47d154b";
+const BASE_URL = "https://api.cnjpa.com/v1";
 
 app.use(cors());
 app.use(express.json());
 
-// === 1. Servir Arquivos Estáticos ===
-const distPath = path.join(__dirname, 'dist');
-app.use(express.static(distPath));
+// CONFIGURAÇÃO PARA RENDER: Servir arquivos estáticos do frontend
+// Quando você rodar 'npm run build', o Vite cria a pasta 'dist'
+app.use(express.static(path.join(__dirname, 'dist')));
 
-// === 2. Proxy Genérico (CNPJa) ===
+// Rota da API
+app.get('/companies', async (req, res) => {
+    const { date } = req.query;
 
-// Rota específica para CNPJa/Infosimples (POST)
-// O frontend envia { url: '...', method: 'POST', data: ... }
-app.post('/infosimples-proxy', (clientReq, clientRes) => {
-  const { url: targetUrlStr, method, headers: customHeaders, data } = clientReq.body;
-
-  if (!targetUrlStr) {
-    return clientRes.status(400).json({ error: 'URL alvo não fornecida' });
-  }
-
-  const targetUrl = url.parse(targetUrlStr);
-  const postData = data ? JSON.stringify(data) : null;
-
-  const options = {
-    hostname: targetUrl.hostname,
-    port: 443,
-    path: targetUrl.path,
-    method: method || 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'CNPJRadar/BackendProxy',
-      ...customHeaders // Mescla os headers enviados pelo frontend
-    },
-    rejectUnauthorized: false,
-    timeout: 60000 // Aumentado para 60s
-  };
-
-  const proxyReq = https.request(options, (proxyRes) => {
-    let responseBody = '';
-    proxyRes.on('data', (chunk) => { responseBody += chunk; });
-    proxyRes.on('end', () => {
-      // Repassa o status original da API (ex: 429, 200, 500)
-      clientRes.status(proxyRes.statusCode).send(responseBody);
-    });
-  });
-
-  proxyReq.on('error', (e) => {
-    console.error(`[CNPJa Proxy Error] ${e.message}`);
-    if (!clientRes.headersSent) {
-       clientRes.status(502).json({ error: 'Falha no Proxy CNPJa', details: e.message });
+    if (!date) {
+        return res.status(400).json({ error: "Data é obrigatória (formato YYYY-MM-DD)" });
     }
-  });
 
-  proxyReq.on('timeout', () => {
-      proxyReq.destroy();
-      if (!clientRes.headersSent) {
-        clientRes.status(504).json({ error: 'Timeout ao conectar na API externa (60s excedido)' });
-      }
-  });
+    console.log(`[BACKEND] Buscando empresas para: ${date}`);
 
-  if (postData) {
-    proxyReq.write(postData);
-  }
-  proxyReq.end();
+    try {
+        // O Backend faz a requisição "Server-to-Server", onde não existe bloqueio de CORS
+        const response = await fetch(`${BASE_URL}/companies?opened_at=${date}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': API_KEY
+            }
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[BACKEND] Erro na API CNJPA: ${response.status}`, errorText);
+            
+            // Tratamento especial para 404 (nenhum resultado) para não parecer erro critico
+            if (response.status === 404) {
+                return res.json([]);
+            }
+
+            return res.status(response.status).json({ 
+                error: `Erro na API externa: ${response.status}`, 
+                details: errorText 
+            });
+        }
+
+        const data = await response.json();
+        
+        // Retorna os dados puros para o frontend tratar
+        res.json(data);
+
+    } catch (error) {
+        console.error("[BACKEND] Erro interno:", error);
+        res.status(500).json({ error: "Erro interno no servidor ao buscar dados." });
+    }
 });
 
-// === 3. Fix para Erro de CSS/MIME Type ===
-app.get('*.css', (req, res) => {
-  res.setHeader('Content-Type', 'text/css');
-  res.send('');
-});
-
-// === 4. Fallback para SPA (React) ===
+// Qualquer rota que não seja /companies retorna o index.html (Suporte para SPA/React Router)
 app.get('*', (req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'), (err) => {
-    if (err) {
-      res.status(500).send("Erro fatal: index.html não encontrado. Rode 'npm run build' localmente.");
-    }
-  });
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor Backend rodando na porta ${PORT}`);
+    console.log(`Servidor rodando na porta ${PORT}`);
 });
