@@ -6,7 +6,7 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// O endereço que sabemos que resolve DNS, mesmo com certificado ruim
+// O endereço que sabemos que resolve DNS.
 const TARGET_HOST = 'api.cnpjs.dev';
 
 app.use(cors());
@@ -17,21 +17,21 @@ const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
 
 // === 2. Rota de Proxy para API ===
-app.use('/v2', (clientReq, clientRes) => {
-  console.log(`[Proxy Request] ${clientReq.method} ${clientReq.url}`);
+// Aceita /v1 ou /v2 dinamicamente
+app.use(['/v1', '/v2'], (clientReq, clientRes) => {
+  console.log(`[Proxy Request] ${clientReq.method} ${clientReq.originalUrl}`);
 
   const options = {
     hostname: TARGET_HOST,
     port: 443,
-    path: `/v2${clientReq.url}`,
+    path: clientReq.originalUrl, // Repassa a URL exata (incluindo /v1 ou /v2)
     method: clientReq.method,
     headers: {
       ...clientReq.headers,
-      'host': TARGET_HOST, // Força o Host correto
+      'host': TARGET_HOST,
       'user-agent': 'Mozilla/5.0 (Compatible; CNPJ-Radar/1.0)',
       'accept': 'application/json'
     },
-    // CRÍTICO: Isso ignora o erro de certificado SSL que deu no seu terminal
     rejectUnauthorized: false 
   };
 
@@ -48,7 +48,19 @@ app.use('/v2', (clientReq, clientRes) => {
     headers['access-control-allow-origin'] = '*';
     
     clientRes.writeHead(proxyRes.statusCode, headers);
-    proxyRes.pipe(clientRes, { end: true });
+    
+    // Pipe da resposta E captura do corpo para LOG (Debug)
+    proxyRes.on('data', (chunk) => {
+      clientRes.write(chunk);
+      // Se der erro, vamos logar o que a API disse
+      if (proxyRes.statusCode >= 400) {
+        console.log(`[API Error Body]: ${chunk.toString()}`);
+      }
+    });
+
+    proxyRes.on('end', () => {
+      clientRes.end();
+    });
   });
 
   proxyReq.on('error', (e) => {
@@ -73,9 +85,10 @@ app.use('/v2', (clientReq, clientRes) => {
 });
 
 // === 3. Fix para Erro de CSS/MIME Type ===
-// Se pedir um arquivo estático que não existe, retorna 404 vazio, não HTML
-app.get(/\.(css|js|png|jpg|ico|map)$/, (req, res) => {
-  res.status(404).end();
+// Se pedir index.css e ele não existir na raiz (porque está em assets), retorna 200 vazio para não quebrar
+app.get('/index.css', (req, res) => {
+  res.setHeader('Content-Type', 'text/css');
+  res.send('/* CSS ignorado pelo server.js */');
 });
 
 // === 4. Fallback para SPA (React) ===
