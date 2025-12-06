@@ -23,7 +23,7 @@ app.get('/api/status', (req, res) => {
     res.json({
         status: 'online',
         google_key_configured: !!GOOGLE_API_KEY,
-        msg: "Sistema de Mineração Otimizado (Max 5 Leads)"
+        msg: "Sistema de Streaming Ativo (Real-time)"
     });
 });
 
@@ -42,8 +42,8 @@ const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  */
 async function findCnpjInWeb(companyName, city) {
     try {
-        // Delay aleatório para evitar bloqueio (Humanize)
-        await wait(500 + Math.random() * 1000);
+        // Delay aleatório reduzido para streaming ser mais fluido
+        await wait(200 + Math.random() * 500);
 
         const termoBusca = `${cleanString(companyName)}-${cleanString(city)}`.replace(/ /g, "-");
         const searchUrl = `https://cnpj.biz/procura/${termoBusca}`;
@@ -54,7 +54,7 @@ async function findCnpjInWeb(companyName, city) {
             headers: { 
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             },
-            timeout: 8000 // 8s timeout por request
+            timeout: 5000 // 5s timeout por request
         });
 
         const $ = cheerio.load(response.data);
@@ -71,7 +71,6 @@ async function findCnpjInWeb(companyName, city) {
 
         return null;
     } catch (error) {
-        // Falha silenciosa no minerador para não travar o processo
         return null;
     }
 }
@@ -82,7 +81,7 @@ async function findCnpjInWeb(companyName, city) {
 async function enrichWithBrasilApi(cnpj) {
     if (!cnpj) return null;
     try {
-        const response = await axios.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { timeout: 6000 });
+        const response = await axios.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { timeout: 5000 });
         return response.data;
     } catch (error) {
         return null;
@@ -90,7 +89,7 @@ async function enrichWithBrasilApi(cnpj) {
 }
 
 /**
- * 3. PROCESSO PRINCIPAL (PIPELINE)
+ * 3. PROCESSO DE UM LEAD
  */
 async function processLead(place, niche, location) {
     const rawName = place.displayName?.text || "Nome Desconhecido";
@@ -172,26 +171,31 @@ async function processLead(place, niche, location) {
     return companyData;
 }
 
-// ROTA DE PROSPECÇÃO
+// ROTA DE PROSPECÇÃO COM STREAMING
 app.post('/api/prospect', async (req, res) => {
     // Aumenta timeout desta rota específica
-    res.setTimeout(120000);
+    req.setTimeout(300000); // 5 minutos de socket aberto
 
     const { niche, location } = req.body;
 
+    // Configura headers para Streaming de Texto
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
     if (!niche || !location) {
-        return res.status(400).json({ error: "Parâmetros 'niche' e 'location' são obrigatórios." });
+        res.write(JSON.stringify({ error: "Parâmetros inválidos" }) + "\n");
+        return res.end();
     }
 
     try {
-        console.log(`[PROSPECT] Iniciando: ${niche} em ${location}`);
+        console.log(`[STREAM] Iniciando: ${niche} em ${location}`);
 
         // 1. Busca no Google Places
         const googleResponse = await axios.post(
             'https://places.googleapis.com/v1/places:searchText',
             {
                 textQuery: `${niche} em ${location}`,
-                pageSize: 5 // REDUZIDO PARA 5 PARA EVITAR TIMEOUT E TRAVAMENTO
+                pageSize: 10 // Voltamos para 10 pois com stream o timeout não é problema
             },
             {
                 headers: {
@@ -199,35 +203,31 @@ app.post('/api/prospect', async (req, res) => {
                     'X-Goog-Api-Key': GOOGLE_API_KEY,
                     'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.businessStatus'
                 },
-                timeout: 10000
+                timeout: 15000
             }
         );
 
         const places = googleResponse.data.places || [];
         
         if (places.length === 0) {
-            return res.json({ message: "Nenhum lead encontrado.", data: [] });
+            res.write(JSON.stringify({ info: "Nenhum lead encontrado no Google." }) + "\n");
+            return res.end();
         }
 
-        console.log(`[PROSPECT] Google retornou ${places.length} leads. Processando sequencialmente...`);
-
-        // 2. Processa SEQUENCIALMENTE para não travar a memória/CPU
-        const results = [];
+        // 2. Processa e envia UM POR UM (Streaming)
         for (const place of places) {
             const result = await processLead(place, niche, location);
-            results.push(result);
+            // Envia o JSON do lead seguido de quebra de linha
+            res.write(JSON.stringify(result) + "\n");
+            // Limpa o buffer se possível (flush não é garantido no express, mas write força envio em chunked)
         }
 
-        res.json({
-            message: "Prospecção Finalizada",
-            data: results
-        });
-
     } catch (error) {
-        console.error("Erro no Servidor:", error.message);
-        // Garante que o frontend receba um JSON mesmo com erro
-        res.status(500).json({ error: "Erro interno ou timeout na prospecção. Tente novamente." });
+        console.error("Erro no Stream:", error.message);
+        res.write(JSON.stringify({ error: "Erro na conexão com Google API ou limite excedido." }) + "\n");
     }
+
+    res.end();
 });
 
 // Serve o Frontend (React)
