@@ -3,7 +3,7 @@ import { EnrichedCompany, SearchHistoryItem, SearchQuery } from './types';
 import { prospectLeads } from './services/api';
 import ResultsTable from './components/ResultsTable';
 import HistorySidebar from './components/HistorySidebar';
-import { Menu, Layers, Loader2, WifiOff, Search, MapPin, Briefcase, Zap } from 'lucide-react';
+import { Menu, Layers, Loader2, WifiOff, Search, MapPin, Briefcase, Zap, AlertTriangle } from 'lucide-react';
 
 function App() {
   const [niche, setNiche] = useState('');
@@ -36,8 +36,8 @@ function App() {
 
     setLoading(true);
     setError(null);
-    setCurrentResults([]); // Limpa resultados anteriores
-    setLoadingMsg('Conectando ao servidor (pode levar alguns segundos)...');
+    setCurrentResults([]); 
+    setLoadingMsg('Iniciando busca inteligente (Google Places + Base Oficial)...');
     
     let leadsCount = 0;
     const tempResults: EnrichedCompany[] = [];
@@ -45,7 +45,6 @@ function App() {
     try {
       const query: SearchQuery = { niche, location, region_type: 'cidade' };
       
-      // A função prospectLeads agora lida com o retry automaticamente
       await prospectLeads(query, (newLead) => {
           setCurrentResults(prev => {
               if (prev.some(p => p.razao_social === newLead.razao_social)) return prev;
@@ -54,11 +53,11 @@ function App() {
           
           tempResults.push(newLead);
           leadsCount++;
-          setLoadingMsg(`Encontrados: ${leadsCount} leads (Buscando na API Oficial...)`);
+          setLoadingMsg(`Encontrados: ${leadsCount} leads (Verificando dados fiscais...)`);
       });
 
       if (leadsCount === 0) {
-          setError("A busca foi concluída, mas nenhum lead foi encontrado com os critérios.");
+          setError("Nenhum resultado encontrado. Tente buscar um termo mais genérico (ex: 'Alimentos' ao invés de 'Comida Vegana') ou verifique se a cidade está correta.");
       } else {
         const newHistoryItem: SearchHistoryItem = {
             id: crypto.randomUUID(),
@@ -72,7 +71,6 @@ function App() {
 
     } catch (err: any) {
       console.error("App Error:", err);
-      // Ignora erro se já trouxe resultados
       if (leadsCount === 0) {
         setError(err.message || "O servidor demorou para responder. Tente novamente em alguns segundos.");
       }
@@ -124,7 +122,6 @@ function App() {
         </header>
 
         <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full scroll-smooth">
-          {/* Search Box */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8 relative overflow-hidden">
              <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-indigo-50 rounded-full blur-xl"></div>
              <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-32 h-32 bg-blue-50 rounded-full blur-xl"></div>
@@ -132,7 +129,7 @@ function App() {
              <div className="relative z-10">
                 <div className="mb-6">
                   <h2 className="text-2xl font-bold text-slate-800">Nova Prospecção</h2>
-                  <p className="text-slate-500">O sistema buscará leads e consultará a API oficial para enriquecer os dados.</p>
+                  <p className="text-slate-500">O sistema buscará leads no Google e nas bases oficiais (Receita) automaticamente.</p>
                 </div>
 
                 <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-4 items-end">
@@ -144,7 +141,7 @@ function App() {
                         type="text" 
                         value={niche}
                         onChange={(e) => setNiche(e.target.value)}
-                        placeholder="Ex: Pizzaria, Contabilidade, Mecânica..." 
+                        placeholder="Ex: Padaria, Farmácia, Metalúrgica..." 
                         className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
                         required
                       />
@@ -152,14 +149,14 @@ function App() {
                   </div>
 
                   <div className="flex-1 w-full">
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Localização (Cidade)</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Localização (Cidade/UF)</label>
                     <div className="relative">
                       <MapPin className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
                       <input 
                         type="text"
                         value={location}
                         onChange={(e) => setLocation(e.target.value)} 
-                        placeholder="Ex: São Paulo, Belo Horizonte..." 
+                        placeholder="Ex: São Paulo SP, Boituva SP..." 
                         className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
                         required
                       />
@@ -186,10 +183,10 @@ function App() {
           </div>
             
           {error && (
-            <div className="p-4 bg-red-50 text-red-800 rounded-lg flex items-start gap-3 text-sm border border-red-200">
-              <WifiOff className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
+            <div className="p-4 bg-amber-50 text-amber-900 rounded-lg flex items-start gap-3 text-sm border border-amber-200">
+              <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-amber-600" />
               <div>
-                <p className="font-bold">Status da Prospecção:</p>
+                <p className="font-bold">Atenção:</p>
                 <p>{error}</p>
               </div>
             </div>
