@@ -1,33 +1,28 @@
-import { Company } from '../types';
+import { EnrichedCompany, SearchQuery } from '../types';
 
-// Determina a URL do backend dinamicamente
+// Detecta a URL correta do backend (Localhost vs Produção)
 const getBackendUrl = () => {
-  // Verificação de segurança para ambiente browser
   if (typeof window === 'undefined') return "http://localhost:3000";
-
-  // Se estiver rodando no localhost e a porta NÃO for 3000 (ex: 5173 do Vite),
-  // assumimos que é desenvolvimento e o backend está na 3000.
+  // Se estiver rodando localmente (vite na 5173, backend na 3000)
   if (window.location.hostname === 'localhost' && window.location.port !== '3000') {
     return "http://localhost:3000";
   }
-  
-  // Em produção (Render) ou se o frontend for servido pelo mesmo servidor na porta 3000,
-  // usamos caminho relativo (string vazia), o que faz o navegador chamar a mesma origem.
+  // Em produção (Render), a URL é relativa (mesmo domínio)
   return ""; 
 };
 
 const BACKEND_URL = getBackendUrl();
 
-export const fetchCompaniesByDate = async (date: string): Promise<Company[]> => {
-  console.log(`Solicitando ao backend (${BACKEND_URL || 'relativo'}): ${date}`);
+export const prospectLeads = async (query: SearchQuery): Promise<EnrichedCompany[]> => {
+  console.log(`[API] Iniciando prospecção para:`, query);
 
   try {
-    // Agora chamamos NOSSO backend em /companies
-    const response = await fetch(`${BACKEND_URL}/companies?date=${date}`, {
-      method: 'GET',
+    const response = await fetch(`${BACKEND_URL}/api/prospect`, {
+      method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-      }
+      },
+      body: JSON.stringify(query)
     });
 
     if (!response.ok) {
@@ -36,43 +31,29 @@ export const fetchCompaniesByDate = async (date: string): Promise<Company[]> => 
         const errorBody = await response.json();
         errorMessage = errorBody.error || JSON.stringify(errorBody);
       } catch (e) {
-        // Falha ao ler corpo do erro
+        // Ignora erro de parse
       }
-      throw new Error(errorMessage);
+      throw new Error(errorMessage || "Erro na comunicação com o servidor.");
     }
 
     const data = await response.json();
-    
-    // Normalização dos dados vindos do backend
-    const items = Array.isArray(data) ? data : (data.data || data.items || []);
-    
-    if (!Array.isArray(items)) {
-      console.warn("Estrutura de resposta desconhecida:", data);
-      return [];
-    }
-
-    return items.map((item: any) => ({
-      cnpj: item.cnpj,
-      razao_social: item.razao_social || item.name || "N/A",
-      nome_fantasia: item.nome_fantasia || item.fantasy_name || item.razao_social || "N/A",
-      data_inicio_atividade: item.data_inicio_atividade || item.opened_at || date,
-      cnae_fiscal_principal: {
-        codigo: item.cnae_fiscal_principal?.codigo || item.main_activity_code || "00.00-0-00",
-        nome: item.cnae_fiscal_principal?.nome || item.main_activity_text || "Atividade Principal",
-      },
-      email: item.email || null,
-      telefone: item.telefone || item.phone || null,
-      uf: item.uf || item.state || "",
-      municipio: item.municipio || item.city || ""
-    }));
+    return data.data || [];
 
   } catch (error: any) {
-    console.error("Erro na comunicação com o backend:", error);
-    
+    console.error("[API] Erro na prospecção:", error);
     if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
-      throw new Error("Não foi possível conectar ao servidor. Verifique se o Backend (server.js) está rodando.");
+      throw new Error("Não foi possível conectar ao servidor. Verifique se o backend está rodando.");
     }
-    
     throw error;
+  }
+};
+
+// Função auxiliar para verificar status (opcional)
+export const checkApiStatus = async () => {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/status`);
+    return await res.json();
+  } catch (e) {
+    return { status: 'offline' };
   }
 };
