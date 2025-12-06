@@ -8,6 +8,15 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Proteção contra crash do servidor
+process.on('uncaughtException', (err) => {
+  console.error('[SERVER CRASH PREVENTED]:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UNHANDLED REJECTION]:', reason);
+});
+
 // Chaves de API
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "AIzaSyC84DLI9J_TLNapOQEGHRjf9U9IlnCLUzA";
 const CNPJA_API_KEY = process.env.CNPJA_API_KEY || "50cd7f37-a8a7-4076-b180-520a12dfdc3c-608f7b7f-2488-44b9-81f5-017cf47d154b";
@@ -19,10 +28,11 @@ app.use(express.static(path.join(__dirname, 'dist')));
 // --- ARMAZENAMENTO DE JOBS EM MEMÓRIA ---
 const jobs = {}; 
 
+// Limpeza de Jobs antigos
 setInterval(() => {
     const now = Date.now();
     for (const id in jobs) {
-        if (now - jobs[id].startTime > 10 * 60 * 1000) { 
+        if (now - jobs[id].startTime > 15 * 60 * 1000) { // Aumentado para 15min
             delete jobs[id];
         }
     }
@@ -34,27 +44,22 @@ const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * Extrai a UF (Estado) de um endereço formatado do Google
- * Ex: "Av. Paulista, 1000 - Bela Vista, São Paulo - SP, 01310-100" -> "SP"
  */
 function extractStateFromAddress(address) {
     if (!address) return null;
-    // Procura por padrão " - UF," ou " - UF" ou "Estado - UF"
     const match = address.match(/[- ,]([A-Z]{2})\b/);
-    // Lista de UFs válidas para evitar falsos positivos
     const validUFs = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SP","SE","TO"];
     
     if (match && validUFs.includes(match[1])) {
         return match[1];
     }
-    // Tentativa secundária: procurar UF no final da string se não tiver CEP
     const matchEnd = address.match(/\b([A-Z]{2})$/);
     if (matchEnd && validUFs.includes(matchEnd[1])) return matchEnd[1];
-    
     return null;
 }
 
 /**
- * BUSCA E ENRIQUECIMENTO VIA CNPJa (Estratégia Blindada)
+ * BUSCA E ENRIQUECIMENTO VIA CNPJa
  */
 async function findAndEnrichWithCnpja(companyName, state) {
     if (!companyName) return null;
@@ -62,27 +67,23 @@ async function findAndEnrichWithCnpja(companyName, state) {
     try {
         console.log(`[CNPJa] Buscando: "${companyName}" em "${state || 'BR'}"`);
         
-        // Monta os parâmetros de busca
         const params = {
-            'names.in': companyName, // Busca por Razão Social ou Fantasia
-            limit: 1 // Queremos o melhor match
+            'names.in': companyName,
+            limit: 1 
         };
 
-        // Se tivermos o estado, filtramos para aumentar a precisão
         if (state) {
             params['address.state.in'] = state;
         }
 
         const response = await axios.get('https://api.cnpja.com/office', {
-            headers: {
-                'Authorization': CNPJA_API_KEY
-            },
+            headers: { 'Authorization': CNPJA_API_KEY },
             params: params,
-            timeout: 10000
+            timeout: 15000 // Timeout de 15s para a API da CNPJa
         });
 
         if (response.data && response.data.records && response.data.records.length > 0) {
-            return response.data.records[0]; // Retorna a primeira empresa encontrada
+            return response.data.records[0];
         }
 
         return null;
@@ -101,7 +102,6 @@ async function processLead(place, niche, location) {
     const address = place.formattedAddress || "";
     const state = extractStateFromAddress(address);
     
-    // Objeto base com dados do Google
     let companyData = {
         cnpj: null,
         razao_social: rawName,
@@ -128,11 +128,9 @@ async function processLead(place, niche, location) {
     };
 
     try {
-        // AQUI ESTÁ A MUDANÇA: Chamada direta à CNPJa
         const officialData = await findAndEnrichWithCnpja(rawName, state);
 
         if (officialData) {
-            // Mapeamento dos dados oficiais da CNPJa para nosso formato
             companyData.cnpj = officialData.taxId?.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
             companyData.razao_social = officialData.company?.name || rawName;
             companyData.nome_fantasia = officialData.alias || rawName;
@@ -147,16 +145,14 @@ async function processLead(place, niche, location) {
 
             companyData.porte = officialData.company?.size?.text || "---";
 
-            // Contatos (CNPJa é excelente nisso)
             if (officialData.emails && officialData.emails.length > 0) {
                 companyData.contato.email = officialData.emails[0].address;
             }
             if (officialData.phones && officialData.phones.length > 0) {
                 const ph = officialData.phones[0];
-                companyData.contato.telefone = `(${ph.area}) ${ph.number}`; // Prioriza telefone oficial
+                companyData.contato.telefone = `(${ph.area}) ${ph.number}`; 
             }
 
-            // Endereço Oficial
             if (officialData.address) {
                 companyData.endereco.logradouro = `${officialData.address.street}, ${officialData.address.number}`;
                 companyData.endereco.bairro = officialData.address.district;
@@ -165,11 +161,6 @@ async function processLead(place, niche, location) {
                 companyData.endereco.cep = officialData.address.zip;
             }
 
-            // Sócios (API retorna na estrutura members)
-            /* Nota: A estrutura 'records' da lista '/office' às vezes não traz os sócios detalhados dependendo do plano,
-               mas se vier, mapeamos. Se não, precisaríamos chamar /company/{id}, mas para performance vamos manter a lista.
-               A CNPJa geralmente retorna o quadro societário na busca detalhada. 
-               Para busca em lista, verificamos se 'company.members' existe. */
             if (officialData.company?.members) {
                 companyData.socios = officialData.company.members.map(m => ({
                     nome: m.person?.name || "Sócio",
@@ -192,8 +183,7 @@ app.get('/api/status', (req, res) => {
     res.json({
         status: 'online',
         mode: 'cnpja_official',
-        google_key_configured: !!GOOGLE_API_KEY,
-        cnpja_key_configured: !!CNPJA_API_KEY
+        uptime: process.uptime()
     });
 });
 
@@ -214,8 +204,10 @@ app.post('/api/start-search', async (req, res) => {
         error: null
     };
 
+    // Responde IMEDIATAMENTE para evitar timeout do navegador
     res.json({ jobId, message: "Busca iniciada em background" });
 
+    // Inicia o processo em background
     (async () => {
         try {
             console.log(`[JOB ${jobId}] Iniciando busca Google: ${niche} - ${location}`);
@@ -239,14 +231,13 @@ app.post('/api/start-search', async (req, res) => {
             const places = googleResponse.data.places || [];
 
             if (places.length === 0) {
-                 jobs[jobId].status = 'completed';
-                 return;
+                if (jobs[jobId]) jobs[jobId].status = 'completed';
+                return;
             }
 
             for (const place of places) {
                 if (!jobs[jobId]) break;
-                // Delay minúsculo apenas para não sobrecarregar em caso de muitos requests
-                await wait(200); 
+                await wait(500); // Delay suave
                 const result = await processLead(place, niche, location);
                 
                 if (jobs[jobId]) {
@@ -256,7 +247,7 @@ app.post('/api/start-search', async (req, res) => {
 
             if (jobs[jobId]) {
                 jobs[jobId].status = 'completed';
-                console.log(`[JOB ${jobId}] Concluído.`);
+                console.log(`[JOB ${jobId}] Concluído com ${jobs[jobId].results.length} resultados.`);
             }
 
         } catch (error) {
@@ -274,7 +265,7 @@ app.get('/api/check-search/:id', (req, res) => {
     const job = jobs[jobId];
 
     if (!job) {
-        return res.status(404).json({ error: "Job não encontrado ou expirado" });
+        return res.status(404).json({ error: "Job não encontrado ou expirado (Cold Start)" });
     }
 
     res.json({
