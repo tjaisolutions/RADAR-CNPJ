@@ -1,21 +1,22 @@
 import { EnrichedCompany, SearchQuery } from '../types';
 
-// Detecta a URL correta do backend (Localhost vs Produção)
+// Detecta a URL correta do backend
 const getBackendUrl = () => {
-  if (typeof window === 'undefined') return "http://localhost:3000";
-  // Se estiver rodando localmente (vite na 5173, backend na 3000)
-  if (window.location.hostname === 'localhost' && window.location.port !== '3000') {
-    return "http://localhost:3000";
+  // Em produção (Render), usamos caminho relativo para evitar problemas de CORS/Protocolo
+  // O servidor Node serve tanto os estáticos quanto a API na mesma porta
+  if (!window.location.hostname.includes('localhost')) {
+      return ""; 
   }
-  // Em produção (Render), a URL é relativa (mesmo domínio)
-  return ""; 
+  
+  // Desenvolvimento Local
+  return "http://localhost:3000";
 };
 
 const BACKEND_URL = getBackendUrl();
 
 export const prospectLeads = async (query: SearchQuery): Promise<EnrichedCompany[]> => {
-  console.log(`[API] Iniciando prospecção para:`, query);
-
+  console.log(`[API] Conectando em: ${BACKEND_URL || '/api/prospect'}`);
+  
   try {
     const response = await fetch(`${BACKEND_URL}/api/prospect`, {
       method: 'POST',
@@ -40,15 +41,14 @@ export const prospectLeads = async (query: SearchQuery): Promise<EnrichedCompany
     return data.data || [];
 
   } catch (error: any) {
-    console.error("[API] Erro na prospecção:", error);
-    if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
-      throw new Error("Não foi possível conectar ao servidor. Verifique se o backend está rodando.");
+    console.error("[API] Falha:", error);
+    if (error.name === 'TypeError' && (error.message === 'Load failed' || error.message === 'Failed to fetch')) {
+        throw new Error("A conexão caiu por demora na resposta. Tente buscar um nicho mais específico.");
     }
     throw error;
   }
 };
 
-// Função auxiliar para verificar status (opcional)
 export const checkApiStatus = async () => {
   try {
     const res = await fetch(`${BACKEND_URL}/api/status`);
