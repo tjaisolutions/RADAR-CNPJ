@@ -37,33 +37,29 @@ function App() {
     setLoading(true);
     setError(null);
     setCurrentResults([]); // Limpa resultados anteriores
-    setLoadingMsg('Iniciando processamento remoto...');
+    setLoadingMsg('Conectando ao servidor (pode levar alguns segundos)...');
     
-    // Usamos um ref local para contar leads nesta execução sem depender do estado assíncrono
     let leadsCount = 0;
     const tempResults: EnrichedCompany[] = [];
 
     try {
       const query: SearchQuery = { niche, location, region_type: 'cidade' };
       
-      // A função prospectLeads agora usa Polling, então não vai dar timeout de rede
+      // A função prospectLeads agora lida com o retry automaticamente
       await prospectLeads(query, (newLead) => {
-          // Atualiza o estado visual
           setCurrentResults(prev => {
-              // Evita duplicatas visuais caso o polling retorne dados repetidos por lag
               if (prev.some(p => p.razao_social === newLead.razao_social)) return prev;
               return [...prev, newLead];
           });
           
           tempResults.push(newLead);
           leadsCount++;
-          setLoadingMsg(`Encontrados: ${leadsCount} leads (Minerando CNPJs...)`);
+          setLoadingMsg(`Encontrados: ${leadsCount} leads (Buscando na API Oficial...)`);
       });
 
       if (leadsCount === 0) {
           setError("A busca foi concluída, mas nenhum lead foi encontrado com os critérios.");
       } else {
-        // Salva histórico
         const newHistoryItem: SearchHistoryItem = {
             id: crypto.randomUUID(),
             query: query,
@@ -76,9 +72,9 @@ function App() {
 
     } catch (err: any) {
       console.error("App Error:", err);
-      // Se já achou alguns leads, o erro é menos crítico
+      // Ignora erro se já trouxe resultados
       if (leadsCount === 0) {
-        setError(err.message || "Erro de conexão com o servidor de processamento.");
+        setError(err.message || "O servidor demorou para responder. Tente novamente em alguns segundos.");
       }
     } finally {
       setLoading(false);
@@ -130,14 +126,13 @@ function App() {
         <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full scroll-smooth">
           {/* Search Box */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8 relative overflow-hidden">
-             {/* Background decoration */}
              <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-indigo-50 rounded-full blur-xl"></div>
              <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-32 h-32 bg-blue-50 rounded-full blur-xl"></div>
 
              <div className="relative z-10">
                 <div className="mb-6">
                   <h2 className="text-2xl font-bold text-slate-800">Nova Prospecção</h2>
-                  <p className="text-slate-500">O sistema buscará leads, minerará o CNPJ e enriquecerá com dados fiscais automaticamente.</p>
+                  <p className="text-slate-500">O sistema buscará leads e consultará a API oficial para enriquecer os dados.</p>
                 </div>
 
                 <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-4 items-end">
@@ -200,7 +195,6 @@ function App() {
             </div>
           )}
 
-          {/* Results Area */}
           <div className="flex-1 min-h-[400px]">
             <ResultsTable data={currentResults} />
           </div>
