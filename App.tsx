@@ -37,31 +37,38 @@ function App() {
     setLoading(true);
     setError(null);
     setCurrentResults([]); // Limpa resultados anteriores
-    setLoadingMsg('Conectando ao satélite de dados...');
+    setLoadingMsg('Iniciando processamento remoto...');
     
+    // Usamos um ref local para contar leads nesta execução sem depender do estado assíncrono
+    let leadsCount = 0;
     const tempResults: EnrichedCompany[] = [];
 
     try {
       const query: SearchQuery = { niche, location, region_type: 'cidade' };
       
-      // Chama a API com um CALLBACK. A cada lead encontrado, essa função roda.
+      // A função prospectLeads agora usa Polling, então não vai dar timeout de rede
       await prospectLeads(query, (newLead) => {
           // Atualiza o estado visual
-          setCurrentResults(prev => [...prev, newLead]);
-          // Guarda numa var temporária para salvar no histórico depois
+          setCurrentResults(prev => {
+              // Evita duplicatas visuais caso o polling retorne dados repetidos por lag
+              if (prev.some(p => p.razao_social === newLead.razao_social)) return prev;
+              return [...prev, newLead];
+          });
+          
           tempResults.push(newLead);
-          setLoadingMsg(`Processando leads em tempo real... (${tempResults.length} encontrados)`);
+          leadsCount++;
+          setLoadingMsg(`Encontrados: ${leadsCount} leads (Minerando CNPJs...)`);
       });
 
-      if (tempResults.length === 0) {
-          setError("A busca terminou mas nenhum lead foi retornado pelo Google/Filtros.");
+      if (leadsCount === 0) {
+          setError("A busca foi concluída, mas nenhum lead foi encontrado com os critérios.");
       } else {
-        // Salva histórico apenas se achou algo
+        // Salva histórico
         const newHistoryItem: SearchHistoryItem = {
             id: crypto.randomUUID(),
             query: query,
             timestamp: Date.now(),
-            resultCount: tempResults.length,
+            resultCount: leadsCount,
             results: tempResults
         };
         setHistory(prev => [newHistoryItem, ...prev]);
@@ -69,9 +76,9 @@ function App() {
 
     } catch (err: any) {
       console.error("App Error:", err);
-      // Se já achou alguns leads, o erro é menos crítico, mostra o que tem
-      if (tempResults.length === 0) {
-        setError(err.message || "Erro de conexão. Verifique se o servidor está online.");
+      // Se já achou alguns leads, o erro é menos crítico
+      if (leadsCount === 0) {
+        setError(err.message || "Erro de conexão com o servidor de processamento.");
       }
     } finally {
       setLoading(false);
@@ -129,7 +136,7 @@ function App() {
 
              <div className="relative z-10">
                 <div className="mb-6">
-                  <h2 className="text-2xl font-bold text-slate-800">Nova Prospecção Automática</h2>
+                  <h2 className="text-2xl font-bold text-slate-800">Nova Prospecção</h2>
                   <p className="text-slate-500">O sistema buscará leads, minerará o CNPJ e enriquecerá com dados fiscais automaticamente.</p>
                 </div>
 
