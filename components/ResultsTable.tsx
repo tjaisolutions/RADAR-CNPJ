@@ -1,6 +1,6 @@
 import React from 'react';
 import { EnrichedCompany } from '../types';
-import { Download, Building2, Phone, Mail, MapPin, Users, DollarSign, CheckCircle2, AlertCircle, SearchX } from 'lucide-react';
+import { Download, Building2, Phone, Mail, MapPin, Users, DollarSign, CheckCircle2, AlertCircle, SearchX, ShieldCheck } from 'lucide-react';
 
 interface ResultsTableProps {
   data: EnrichedCompany[];
@@ -31,7 +31,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `leads_auto_enriched_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `leads_cnpja_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -44,7 +44,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
             <Building2 className="w-8 h-8 opacity-40 text-slate-500" />
         </div>
         <p className="font-medium text-slate-600">Aguardando Prospecção</p>
-        <p className="text-sm">Os dados enriquecidos aparecerão aqui automaticamente.</p>
+        <p className="text-sm">Os dados oficiais aparecerão aqui automaticamente.</p>
       </div>
     );
   }
@@ -54,14 +54,14 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
       <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
         <div>
            <h3 className="font-bold text-slate-800 flex items-center gap-2">
-             Resultados da Mineração
+             Resultados da Prospecção
              <span className="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded-full border border-indigo-200 flex items-center gap-1">
-               <CheckCircle2 className="w-3 h-3" />
-               Automático
+               <ShieldCheck className="w-3 h-3" />
+               API Oficial
              </span>
            </h3>
            <p className="text-xs text-slate-500 mt-1">
-              {data.filter(d => d.cnpj).length} CNPJs encontrados de {data.length} leads
+              {data.filter(d => d.cnpj).length} CNPJs validados de {data.length} leads
            </p>
         </div>
         
@@ -70,7 +70,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
           className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
         >
           <Download className="w-4 h-4" />
-          Baixar Planilha
+          Exportar CSV
         </button>
       </div>
 
@@ -94,15 +94,15 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                   <tr key={index} className="hover:bg-slate-50 transition-colors group">
                     <td className="p-4 w-12 text-center">
                         {hasFullData ? (
-                            <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center mx-auto" title="Dados Completos">
+                            <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center mx-auto" title="Verificado na Receita Federal">
                                 <CheckCircle2 className="w-5 h-5" />
                             </div>
                         ) : hasCnpj ? (
-                             <div className="w-8 h-8 rounded-full bg-yellow-100 text-yellow-600 flex items-center justify-center mx-auto" title="Parcial (BrasilAPI falhou ou incompleto)">
+                             <div className="w-8 h-8 rounded-full bg-yellow-100 text-yellow-600 flex items-center justify-center mx-auto" title="Parcial (CNPJ encontrado, dados limitados)">
                                 <AlertCircle className="w-5 h-5" />
                             </div>
                         ) : (
-                            <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto" title="CNPJ não localizado automaticamente">
+                            <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto" title="Não encontrado na base oficial">
                                 <SearchX className="w-5 h-5" />
                             </div>
                         )}
@@ -113,7 +113,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                         {company.cnpj ? (
                              <span className="text-xs text-slate-600 font-mono mt-0.5 bg-slate-100 px-1 rounded w-fit">{company.cnpj}</span>
                         ) : (
-                             <span className="text-xs text-red-400 italic mt-0.5">CNPJ não minerado</span>
+                             <span className="text-xs text-red-400 italic mt-0.5">Não localizado</span>
                         )}
                         <span className="text-[10px] text-indigo-600 mt-1">{company.nicho}</span>
                       </div>
