@@ -9,16 +9,40 @@ const getBackendUrl = () => {
 
 const BACKEND_URL = getBackendUrl();
 
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Função de Fetch com Retry (Persistência)
+ * Tenta fazer a requisição N vezes antes de falhar.
+ * Essencial para servidores que "dormem" (Cold Start).
+ */
+const fetchWithRetry = async (url: string, options: RequestInit = {}, retries = 5, backoff = 2000) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, options);
+      if (!res.ok) {
+        // Se for erro 500 ou 502 (Bad Gateway), tenta de novo
+        if (res.status >= 500) throw new Error(`Server Error: ${res.status}`);
+        return res; // Se for 400/404, retorna para tratar na lógica principal
+      }
+      return res;
+    } catch (err) {
+      console.warn(`[API] Tentativa ${i + 1}/${retries} falhou. Reconectando em ${backoff}ms...`);
+      if (i === retries - 1) throw err; // Se for a última tentativa, lança o erro
+      await wait(backoff);
+    }
+  }
+  throw new Error("Falha de conexão após múltiplas tentativas.");
+};
+
 export const checkApiStatus = async () => {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/status`);
+    const res = await fetchWithRetry(`${BACKEND_URL}/api/status`, {}, 3, 1000);
     return await res.json();
   } catch (e) {
     return { status: 'offline' };
   }
 };
-
-const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Função baseada em Polling para evitar Timeout
 export const prospectLeads = async (
@@ -29,12 +53,12 @@ export const prospectLeads = async (
   console.log(`[API] Iniciando Job em: ${BACKEND_URL || '/api'}`);
   
   try {
-    // 1. Inicia o Job
-    const startRes = await fetch(`${BACKEND_URL}/api/start-search`, {
+    // 1. Inicia o Job (Com Retry para acordar o servidor)
+    const startRes = await fetchWithRetry(`${BACKEND_URL}/api/start-search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(query)
-    });
+    }, 5, 3000); // 5 tentativas, 3 segundos de intervalo
 
     if (!startRes.ok) throw new Error("Falha ao iniciar busca no servidor.");
     
@@ -45,34 +69,47 @@ export const prospectLeads = async (
     let processedCount = 0;
     let isFinished = false;
     let attempts = 0;
+    let emptyResponses = 0;
 
-    while (!isFinished && attempts < 60) { // Timeout segurança cliente 2min
+    // Aumentei o timeout de segurança para 5 minutos, pois scraping pode demorar
+    while (!isFinished && attempts < 150) { 
         await wait(2000); // Espera 2 segundos entre verificações
         attempts++;
 
-        const checkRes = await fetch(`${BACKEND_URL}/api/check-search/${jobId}`);
-        
-        if (!checkRes.ok) {
-            console.warn("Falha temporária no polling...");
-            continue;
-        }
+        try {
+            const checkRes = await fetch(`${BACKEND_URL}/api/check-search/${jobId}`);
+            
+            if (!checkRes.ok) {
+                // Se der 404 no meio do processo, o job sumiu (servidor reiniciou)
+                if (checkRes.status === 404) throw new Error("O processo foi interrompido pelo servidor.");
+                console.warn("Falha temporária no polling...");
+                continue;
+            }
 
-        const data = await checkRes.json();
+            const data = await checkRes.json();
 
-        if (data.error) throw new Error(data.error);
+            if (data.error) throw new Error(data.error);
 
-        // Verifica novos resultados
-        const currentResults = data.results || [];
-        
-        // Se tem mais resultados do que tínhamos antes, envia os novos
-        if (currentResults.length > processedCount) {
-            const newLeads = currentResults.slice(processedCount);
-            newLeads.forEach((lead: EnrichedCompany) => onLeadFound(lead));
-            processedCount = currentResults.length;
-        }
+            // Verifica novos resultados
+            const currentResults = data.results || [];
+            
+            // Se tem mais resultados do que tínhamos antes, envia os novos
+            if (currentResults.length > processedCount) {
+                const newLeads = currentResults.slice(processedCount);
+                newLeads.forEach((lead: EnrichedCompany) => onLeadFound(lead));
+                processedCount = currentResults.length;
+                emptyResponses = 0; // Reset contador de ociosidade
+            } else {
+                emptyResponses++;
+            }
 
-        if (data.status === 'completed' || data.status === 'error') {
-            isFinished = true;
+            if (data.status === 'completed' || data.status === 'error') {
+                isFinished = true;
+            }
+        } catch (pollError) {
+            console.warn("Erro no polling, tentando novamente...", pollError);
+            // Não aborta imediatamente, tenta continuar
+            if (attempts % 5 === 0 && emptyResponses > 20) isFinished = true; // Aborta se ficar muito tempo sem resposta
         }
     }
 
