@@ -18,74 +18,66 @@ export const checkApiStatus = async () => {
   }
 };
 
-// Nova função preparada para Streaming
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Função baseada em Polling para evitar Timeout
 export const prospectLeads = async (
     query: SearchQuery, 
     onLeadFound: (lead: EnrichedCompany) => void
 ): Promise<void> => {
     
-  console.log(`[API] Stream conectando em: ${BACKEND_URL || '/api/prospect'}`);
+  console.log(`[API] Iniciando Job em: ${BACKEND_URL || '/api'}`);
   
   try {
-    const response = await fetch(`${BACKEND_URL}/api/prospect`, {
+    // 1. Inicia o Job
+    const startRes = await fetch(`${BACKEND_URL}/api/start-search`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(query)
     });
 
-    if (!response.ok) {
-      throw new Error(response.statusText || "Erro ao conectar ao servidor.");
-    }
+    if (!startRes.ok) throw new Error("Falha ao iniciar busca no servidor.");
+    
+    const { jobId } = await startRes.json();
+    console.log(`[API] Job iniciado: ${jobId}`);
 
-    if (!response.body) {
-        throw new Error("O servidor não retornou dados legíveis (ReadableStream).");
-    }
+    // 2. Loop de Polling (Verificação)
+    let processedCount = 0;
+    let isFinished = false;
+    let attempts = 0;
 
-    // Leitor de Stream
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
+    while (!isFinished && attempts < 60) { // Timeout segurança cliente 2min
+        await wait(2000); // Espera 2 segundos entre verificações
+        attempts++;
 
-    while (true) {
-        const { done, value } = await reader.read();
+        const checkRes = await fetch(`${BACKEND_URL}/api/check-search/${jobId}`);
         
-        if (done) break;
+        if (!checkRes.ok) {
+            console.warn("Falha temporária no polling...");
+            continue;
+        }
 
-        // Decodifica o pedaço (chunk) recebido
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
+        const data = await checkRes.json();
 
-        // Processa linhas completas (cada linha é um JSON)
-        const lines = buffer.split("\n");
+        if (data.error) throw new Error(data.error);
+
+        // Verifica novos resultados
+        const currentResults = data.results || [];
         
-        // A última parte pode estar incompleta, guarda no buffer
-        buffer = lines.pop() || "";
+        // Se tem mais resultados do que tínhamos antes, envia os novos
+        if (currentResults.length > processedCount) {
+            const newLeads = currentResults.slice(processedCount);
+            newLeads.forEach((lead: EnrichedCompany) => onLeadFound(lead));
+            processedCount = currentResults.length;
+        }
 
-        for (const line of lines) {
-            if (line.trim()) {
-                try {
-                    const data = JSON.parse(line);
-                    
-                    if (data.error) {
-                        console.error("Erro vindo do stream:", data.error);
-                        // Não lançamos erro aqui para não parar os outros leads que podem ter vindo
-                    } else if (data.info) {
-                        console.log("Info:", data.info);
-                    } else {
-                        // É um lead válido
-                        onLeadFound(data as EnrichedCompany);
-                    }
-                } catch (e) {
-                    console.warn("Erro ao fazer parse de linha JSON:", line);
-                }
-            }
+        if (data.status === 'completed' || data.status === 'error') {
+            isFinished = true;
         }
     }
 
   } catch (error: any) {
-    console.error("[API] Falha no Stream:", error);
+    console.error("[API] Erro no processo:", error);
     throw error;
   }
 };
