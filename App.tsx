@@ -1,21 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Company, SearchHistoryItem } from './types';
-import { fetchCompaniesByDate } from './services/api';
+import { EnrichedCompany, SearchHistoryItem, SearchQuery } from './types';
+import { prospectLeads } from './services/api';
 import ResultsTable from './components/ResultsTable';
 import HistorySidebar from './components/HistorySidebar';
-import { Menu, Database, Loader2, AlertCircle, Radar, Activity, WifiOff } from 'lucide-react';
+import { Menu, Layers, Loader2, WifiOff, Search, MapPin, Briefcase, Zap } from 'lucide-react';
 
 function App() {
-  const [searchDate, setSearchDate] = useState<string>('');
-  const [currentResults, setCurrentResults] = useState<Company[]>([]);
+  const [niche, setNiche] = useState('');
+  const [location, setLocation] = useState('');
+  const [currentResults, setCurrentResults] = useState<EnrichedCompany[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState('');
   const [history, setHistory] = useState<SearchHistoryItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load history from localStorage on mount
   useEffect(() => {
-    const savedHistory = localStorage.getItem('cnpj_search_history');
+    const savedHistory = localStorage.getItem('lead_search_history');
     if (savedHistory) {
       try {
         setHistory(JSON.parse(savedHistory));
@@ -25,30 +26,39 @@ function App() {
     }
   }, []);
 
-  // Save history to localStorage whenever it changes
   useEffect(() => {
-    localStorage.setItem('cnpj_search_history', JSON.stringify(history));
+    localStorage.setItem('lead_search_history', JSON.stringify(history));
   }, [history]);
 
-  const handleSearch = async () => {
-    const today = new Date();
-    // Format YYYY-MM-DD for API
-    const dateStr = today.toISOString().split('T')[0];
-    
-    setSearchDate(dateStr);
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!niche || !location) return;
+
     setLoading(true);
     setError(null);
     setCurrentResults([]);
 
+    // Feedback visual detalhado para o usuário
+    setLoadingStep('Iniciando busca no Google Places...');
+    
     try {
-      const results = await fetchCompaniesByDate(dateStr);
+      const query: SearchQuery = { niche, location, region_type: 'cidade' };
       
+      setTimeout(() => setLoadingStep('Minerando CNPJs em fontes públicas...'), 1500);
+      setTimeout(() => setLoadingStep('Validando dados na Receita Federal (BrasilAPI)...'), 4000);
+      setTimeout(() => setLoadingStep('Compilando relatório final...'), 7000);
+      
+      const results = await prospectLeads(query);
+      
+      if (results.length === 0) {
+        throw new Error("Nenhum local encontrado para este nicho nesta região.");
+      }
+
       setCurrentResults(results);
 
-      // Add to history only if we found something or if it was a successful query
       const newHistoryItem: SearchHistoryItem = {
         id: crypto.randomUUID(),
-        dateQueried: dateStr,
+        query: query,
         timestamp: Date.now(),
         resultCount: results.length,
         results: results
@@ -58,14 +68,16 @@ function App() {
 
     } catch (err: any) {
       console.error("App Error:", err);
-      setError(err.message || "Ocorreu um erro desconhecido ao buscar os dados.");
+      setError(err.message || "Erro ao realizar prospecção.");
     } finally {
       setLoading(false);
+      setLoadingStep('');
     }
   };
 
   const loadFromHistory = (item: SearchHistoryItem) => {
-    setSearchDate(item.dateQueried);
+    setNiche(item.query.niche);
+    setLocation(item.query.location);
     setCurrentResults(item.results);
     if (window.innerWidth < 768) {
       setSidebarOpen(false);
@@ -73,15 +85,14 @@ function App() {
   };
 
   const clearHistory = () => {
-    if (confirm("Tem certeza que deseja limpar todo o histórico?")) {
+    if (confirm("Limpar histórico de prospecção?")) {
       setHistory([]);
-      localStorage.removeItem('cnpj_search_history');
+      localStorage.removeItem('lead_search_history');
     }
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-100">
-      {/* Sidebar */}
+    <div className="flex h-screen overflow-hidden bg-slate-100 font-sans">
       <HistorySidebar 
         history={history} 
         onSelect={loadFromHistory} 
@@ -89,9 +100,7 @@ function App() {
         isOpen={sidebarOpen}
       />
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
         <header className="bg-white border-b border-slate-200 p-4 flex items-center justify-between shadow-sm z-10">
           <div className="flex items-center gap-3">
             <button 
@@ -100,62 +109,92 @@ function App() {
             >
               <Menu className="w-5 h-5" />
             </button>
-            <div className="flex items-center gap-2 text-blue-700">
-              <Database className="w-6 h-6" />
-              <h1 className="text-xl font-bold tracking-tight">CNPJ Hunter Pro</h1>
+            <div className="flex items-center gap-2 text-indigo-700">
+              <Layers className="w-6 h-6" />
+              <h1 className="text-xl font-bold tracking-tight">Lead Enriched <span className="text-indigo-400 font-light">Pro</span></h1>
             </div>
           </div>
         </header>
 
-        {/* Search Area */}
-        <div className="p-6 space-y-6 overflow-y-auto h-full">
-          <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200 text-center relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-blue-500 opacity-50"></div>
-            
-            <div className="max-w-2xl mx-auto relative z-10">
-              <div className="inline-flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider mb-4 border border-blue-100">
-                <Activity className="w-3.5 h-3.5" />
-                Sistema em Tempo Real
-              </div>
-              
-              <h2 className="text-3xl font-bold text-slate-800 mb-3">Monitoramento de Novos CNPJs</h2>
-              <p className="text-slate-500 mb-8 text-lg">
-                Identifique instantaneamente empresas abertas hoje na Receita Federal.
-              </p>
-              
-              <button
-                onClick={handleSearch}
-                disabled={loading}
-                className="group relative w-full sm:w-auto min-w-[280px] px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold text-lg rounded-full flex items-center justify-center gap-3 transition-all disabled:opacity-70 disabled:cursor-not-allowed shadow-xl shadow-blue-600/30 hover:shadow-blue-600/40 hover:scale-[1.02] active:scale-[0.98]"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                    <span className="animate-pulse">Sincronizando Base de Dados...</span>
-                  </>
-                ) : (
-                  <>
-                    <Radar className="w-6 h-6 group-hover:rotate-12 transition-transform" />
-                    <span>Rastrear Aberturas Agora</span>
-                  </>
-                )}
-              </button>
-            </div>
-            
-            {error && (
-              <div className="mt-6 max-w-lg mx-auto p-4 bg-red-50 text-red-800 rounded-lg flex items-start gap-3 text-sm border border-red-200 shadow-sm animate-in fade-in slide-in-from-top-2 text-left">
-                <WifiOff className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
-                <div className="flex-1">
-                  <p className="font-bold mb-1">Falha na conexão:</p>
-                  <p>{error}</p>
+        <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full scroll-smooth">
+          {/* Search Box */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8 relative overflow-hidden">
+             {/* Background decoration */}
+             <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-indigo-50 rounded-full blur-xl"></div>
+             <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-32 h-32 bg-blue-50 rounded-full blur-xl"></div>
+
+             <div className="relative z-10">
+                <div className="mb-6">
+                  <h2 className="text-2xl font-bold text-slate-800">Nova Prospecção Automática</h2>
+                  <p className="text-slate-500">Defina o alvo. Nós buscamos, mineramos o CNPJ e enriquecemos os dados.</p>
                 </div>
-              </div>
-            )}
+
+                <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-4 items-end">
+                  <div className="flex-1 w-full">
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Nicho / Segmento</label>
+                    <div className="relative">
+                      <Briefcase className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
+                      <input 
+                        type="text" 
+                        value={niche}
+                        onChange={(e) => setNiche(e.target.value)}
+                        placeholder="Ex: Farmácias, Construtoras, Padarias..." 
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex-1 w-full">
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Localização (Cidade)</label>
+                    <div className="relative">
+                      <MapPin className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
+                      <input 
+                        type="text"
+                        value={location}
+                        onChange={(e) => setLocation(e.target.value)} 
+                        placeholder="Ex: Curitiba, Campinas, Recife..." 
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full md:w-auto px-8 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-md shadow-indigo-200 transition-all hover:-translate-y-0.5 disabled:opacity-70 disabled:hover:translate-y-0 flex items-center justify-center gap-2"
+                  >
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+                    Prospectar
+                  </button>
+                </form>
+
+                {loading && (
+                  <div className="mt-4 flex items-center justify-center gap-2 text-sm text-indigo-600 font-medium animate-pulse bg-indigo-50 py-2 rounded-lg border border-indigo-100">
+                     <Zap className="w-4 h-4 fill-indigo-600" />
+                     {loadingStep}
+                  </div>
+                )}
+             </div>
           </div>
+            
+          {error && (
+            <div className="p-4 bg-red-50 text-red-800 rounded-lg flex items-start gap-3 text-sm border border-red-200">
+              <WifiOff className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
+              <div>
+                <p className="font-bold">Erro na prospecção:</p>
+                <p>{error}</p>
+                {error.includes("variáveis de ambiente") && (
+                   <p className="text-xs mt-1 text-red-700">Dica: Adicione a GOOGLE_API_KEY nas configurações do Render (Environment Variables).</p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Results Area */}
           <div className="flex-1 min-h-[400px]">
-            <ResultsTable data={currentResults} date={searchDate} />
+            <ResultsTable data={currentResults} />
           </div>
         </div>
       </div>
