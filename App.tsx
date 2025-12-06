@@ -10,7 +10,7 @@ function App() {
   const [location, setLocation] = useState('');
   const [currentResults, setCurrentResults] = useState<EnrichedCompany[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingStep, setLoadingStep] = useState('');
+  const [loadingMsg, setLoadingMsg] = useState('');
   const [history, setHistory] = useState<SearchHistoryItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,43 +36,46 @@ function App() {
 
     setLoading(true);
     setError(null);
-    setCurrentResults([]);
-
-    // Feedback visual do processo automático
-    setLoadingStep('Iniciando busca na Base Global (Google)...');
+    setCurrentResults([]); // Limpa resultados anteriores
+    setLoadingMsg('Conectando ao satélite de dados...');
     
+    const tempResults: EnrichedCompany[] = [];
+
     try {
       const query: SearchQuery = { niche, location, region_type: 'cidade' };
       
-      // Mensagens de progresso simuladas para UX (já que o processo é no backend)
-      setTimeout(() => setLoadingStep('Minerando CNPJs em diretórios públicos...'), 2000);
-      setTimeout(() => setLoadingStep('Consultando Receita Federal (BrasilAPI)...'), 5000);
-      setTimeout(() => setLoadingStep('Compilando dados enriquecidos...'), 8000);
-      
-      const results = await prospectLeads(query);
-      
-      if (!results || results.length === 0) {
-        throw new Error("Nenhum lead encontrado. Tente outra cidade ou nicho.");
+      // Chama a API com um CALLBACK. A cada lead encontrado, essa função roda.
+      await prospectLeads(query, (newLead) => {
+          // Atualiza o estado visual
+          setCurrentResults(prev => [...prev, newLead]);
+          // Guarda numa var temporária para salvar no histórico depois
+          tempResults.push(newLead);
+          setLoadingMsg(`Processando leads em tempo real... (${tempResults.length} encontrados)`);
+      });
+
+      if (tempResults.length === 0) {
+          setError("A busca terminou mas nenhum lead foi retornado pelo Google/Filtros.");
+      } else {
+        // Salva histórico apenas se achou algo
+        const newHistoryItem: SearchHistoryItem = {
+            id: crypto.randomUUID(),
+            query: query,
+            timestamp: Date.now(),
+            resultCount: tempResults.length,
+            results: tempResults
+        };
+        setHistory(prev => [newHistoryItem, ...prev]);
       }
-
-      setCurrentResults(results);
-
-      const newHistoryItem: SearchHistoryItem = {
-        id: crypto.randomUUID(),
-        query: query,
-        timestamp: Date.now(),
-        resultCount: results.length,
-        results: results
-      };
-
-      setHistory(prev => [newHistoryItem, ...prev]);
 
     } catch (err: any) {
       console.error("App Error:", err);
-      setError(err.message || "Erro ao realizar prospecção.");
+      // Se já achou alguns leads, o erro é menos crítico, mostra o que tem
+      if (tempResults.length === 0) {
+        setError(err.message || "Erro de conexão. Verifique se o servidor está online.");
+      }
     } finally {
       setLoading(false);
-      setLoadingStep('');
+      setLoadingMsg('');
     }
   };
 
@@ -174,7 +177,7 @@ function App() {
                 {loading && (
                   <div className="mt-4 flex items-center justify-center gap-2 text-sm text-indigo-600 font-medium animate-pulse bg-indigo-50 py-2 rounded-lg border border-indigo-100">
                      <Zap className="w-4 h-4 fill-indigo-600" />
-                     {loadingStep}
+                     {loadingMsg}
                   </div>
                 )}
              </div>
