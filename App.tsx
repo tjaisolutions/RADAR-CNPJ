@@ -38,20 +38,21 @@ function App() {
     setError(null);
     setCurrentResults([]);
 
-    // Feedback visual detalhado para o usuário
-    setLoadingStep('Iniciando busca no Google Places...');
+    // Feedback visual do processo automático
+    setLoadingStep('Iniciando busca na Base Global (Google)...');
     
     try {
       const query: SearchQuery = { niche, location, region_type: 'cidade' };
       
-      setTimeout(() => setLoadingStep('Minerando CNPJs em fontes públicas...'), 1500);
-      setTimeout(() => setLoadingStep('Validando dados na Receita Federal (BrasilAPI)...'), 4000);
-      setTimeout(() => setLoadingStep('Compilando relatório final...'), 7000);
+      // Mensagens de progresso simuladas para UX (já que o processo é no backend)
+      setTimeout(() => setLoadingStep('Minerando CNPJs em diretórios públicos...'), 2000);
+      setTimeout(() => setLoadingStep('Consultando Receita Federal (BrasilAPI)...'), 5000);
+      setTimeout(() => setLoadingStep('Compilando dados enriquecidos...'), 8000);
       
       const results = await prospectLeads(query);
       
-      if (results.length === 0) {
-        throw new Error("Nenhum local encontrado para este nicho nesta região.");
+      if (!results || results.length === 0) {
+        throw new Error("Nenhum lead encontrado. Tente outra cidade ou nicho.");
       }
 
       setCurrentResults(results);
@@ -126,7 +127,7 @@ function App() {
              <div className="relative z-10">
                 <div className="mb-6">
                   <h2 className="text-2xl font-bold text-slate-800">Nova Prospecção Automática</h2>
-                  <p className="text-slate-500">Defina o alvo. Nós buscamos, mineramos o CNPJ e enriquecemos os dados.</p>
+                  <p className="text-slate-500">O sistema buscará leads, minerará o CNPJ e enriquecerá com dados fiscais automaticamente.</p>
                 </div>
 
                 <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-4 items-end">
@@ -138,7 +139,7 @@ function App() {
                         type="text" 
                         value={niche}
                         onChange={(e) => setNiche(e.target.value)}
-                        placeholder="Ex: Farmácias, Construtoras, Padarias..." 
+                        placeholder="Ex: Pizzaria, Contabilidade, Mecânica..." 
                         className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
                         required
                       />
@@ -153,7 +154,7 @@ function App() {
                         type="text"
                         value={location}
                         onChange={(e) => setLocation(e.target.value)} 
-                        placeholder="Ex: Curitiba, Campinas, Recife..." 
+                        placeholder="Ex: São Paulo, Belo Horizonte..." 
                         className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
                         required
                       />
@@ -183,11 +184,8 @@ function App() {
             <div className="p-4 bg-red-50 text-red-800 rounded-lg flex items-start gap-3 text-sm border border-red-200">
               <WifiOff className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
               <div>
-                <p className="font-bold">Erro na prospecção:</p>
+                <p className="font-bold">Status da Prospecção:</p>
                 <p>{error}</p>
-                {error.includes("variáveis de ambiente") && (
-                   <p className="text-xs mt-1 text-red-700">Dica: Adicione a GOOGLE_API_KEY nas configurações do Render (Environment Variables).</p>
-                )}
               </div>
             </div>
           )}
