@@ -3,28 +3,26 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
-const cheerio = require('cheerio');
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Chave API do Google
+// Chaves de API
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "AIzaSyC84DLI9J_TLNapOQEGHRjf9U9IlnCLUzA";
+const CNPJA_API_KEY = process.env.CNPJA_API_KEY || "50cd7f37-a8a7-4076-b180-520a12dfdc3c-608f7b7f-2488-44b9-81f5-017cf47d154b";
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // --- ARMAZENAMENTO DE JOBS EM MEMÓRIA ---
-// Em produção real, usaria Redis ou Banco de Dados.
 const jobs = {}; 
 
-// Limpa jobs antigos a cada 10 minutos para não estourar memória
 setInterval(() => {
     const now = Date.now();
     for (const id in jobs) {
-        if (now - jobs[id].startTime > 10 * 60 * 1000) { // 10 min
+        if (now - jobs[id].startTime > 10 * 60 * 1000) { 
             delete jobs[id];
         }
     }
@@ -32,55 +30,65 @@ setInterval(() => {
 
 // --- FUNÇÕES UTILITÁRIAS ---
 
-const cleanString = (str) => {
-    if (!str) return "";
-    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9 ]/g, "").toLowerCase();
-};
-
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * MINERADOR WEB
+ * Extrai a UF (Estado) de um endereço formatado do Google
+ * Ex: "Av. Paulista, 1000 - Bela Vista, São Paulo - SP, 01310-100" -> "SP"
  */
-async function findCnpjInWeb(companyName, city) {
-    try {
-        await wait(500 + Math.random() * 1000); // Delay humano
-
-        const termoBusca = `${cleanString(companyName)}-${cleanString(city)}`.replace(/ /g, "-");
-        const searchUrl = `https://cnpj.biz/procura/${termoBusca}`;
-        
-        console.log(`[MINER] Buscando CNPJ para: ${companyName}...`);
-
-        const response = await axios.get(searchUrl, { 
-            headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            },
-            timeout: 8000
-        });
-
-        const $ = cheerio.load(response.data);
-        const textContent = $('body').text();
-        const cnpjRegex = /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/g;
-        const matches = textContent.match(cnpjRegex);
-
-        if (matches && matches.length > 0) {
-            return matches[0].replace(/[^\d]/g, '');
-        }
-        return null;
-    } catch (error) {
-        return null;
+function extractStateFromAddress(address) {
+    if (!address) return null;
+    // Procura por padrão " - UF," ou " - UF" ou "Estado - UF"
+    const match = address.match(/[- ,]([A-Z]{2})\b/);
+    // Lista de UFs válidas para evitar falsos positivos
+    const validUFs = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SP","SE","TO"];
+    
+    if (match && validUFs.includes(match[1])) {
+        return match[1];
     }
+    // Tentativa secundária: procurar UF no final da string se não tiver CEP
+    const matchEnd = address.match(/\b([A-Z]{2})$/);
+    if (matchEnd && validUFs.includes(matchEnd[1])) return matchEnd[1];
+    
+    return null;
 }
 
 /**
- * ENRIQUECIMENTO BRASILAPI
+ * BUSCA E ENRIQUECIMENTO VIA CNPJa (Estratégia Blindada)
  */
-async function enrichWithBrasilApi(cnpj) {
-    if (!cnpj) return null;
+async function findAndEnrichWithCnpja(companyName, state) {
+    if (!companyName) return null;
+
     try {
-        const response = await axios.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { timeout: 8000 });
-        return response.data;
+        console.log(`[CNPJa] Buscando: "${companyName}" em "${state || 'BR'}"`);
+        
+        // Monta os parâmetros de busca
+        const params = {
+            'names.in': companyName, // Busca por Razão Social ou Fantasia
+            limit: 1 // Queremos o melhor match
+        };
+
+        // Se tivermos o estado, filtramos para aumentar a precisão
+        if (state) {
+            params['address.state.in'] = state;
+        }
+
+        const response = await axios.get('https://api.cnpja.com/office', {
+            headers: {
+                'Authorization': CNPJA_API_KEY
+            },
+            params: params,
+            timeout: 10000
+        });
+
+        if (response.data && response.data.records && response.data.records.length > 0) {
+            return response.data.records[0]; // Retorna a primeira empresa encontrada
+        }
+
+        return null;
+
     } catch (error) {
+        console.error(`[CNPJa Error] ${companyName}:`, error.message);
         return null;
     }
 }
@@ -90,7 +98,10 @@ async function enrichWithBrasilApi(cnpj) {
  */
 async function processLead(place, niche, location) {
     const rawName = place.displayName?.text || "Nome Desconhecido";
+    const address = place.formattedAddress || "";
+    const state = extractStateFromAddress(address);
     
+    // Objeto base com dados do Google
     let companyData = {
         cnpj: null,
         razao_social: rawName,
@@ -102,9 +113,9 @@ async function processLead(place, niche, location) {
         porte: "---",
         socios: [],
         endereco: {
-            logradouro: place.formattedAddress || "",
+            logradouro: address,
             municipio: location,
-            uf: "BR",
+            uf: state || "BR",
             cep: ""
         },
         contato: {
@@ -117,40 +128,57 @@ async function processLead(place, niche, location) {
     };
 
     try {
-        const foundCnpj = await findCnpjInWeb(rawName, location);
+        // AQUI ESTÁ A MUDANÇA: Chamada direta à CNPJa
+        const officialData = await findAndEnrichWithCnpja(rawName, state);
 
-        if (foundCnpj) {
-            companyData.cnpj = foundCnpj;
-            const fiscalData = await enrichWithBrasilApi(foundCnpj);
-
-            if (fiscalData) {
-                companyData.razao_social = fiscalData.razao_social;
-                companyData.nome_fantasia = fiscalData.nome_fantasia || rawName;
-                companyData.data_abertura = fiscalData.data_inicio_atividade;
-                companyData.status = fiscalData.descricao_situacao_cadastral;
+        if (officialData) {
+            // Mapeamento dos dados oficiais da CNPJa para nosso formato
+            companyData.cnpj = officialData.taxId?.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+            companyData.razao_social = officialData.company?.name || rawName;
+            companyData.nome_fantasia = officialData.alias || rawName;
+            companyData.data_abertura = officialData.founded;
+            companyData.status = officialData.status?.text || companyData.status;
+            
+            if (officialData.company?.equity) {
                 try {
-                    companyData.capital_social = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(fiscalData.capital_social);
-                } catch (e) { companyData.capital_social = fiscalData.capital_social; }
-                companyData.porte = fiscalData.porte;
-                companyData.contato.email = fiscalData.email || null;
-                if (fiscalData.ddd_telefone_1) {
-                    const telFiscal = `(${fiscalData.ddd_telefone_1}) ${fiscalData.telefone_1}`;
-                    if (!companyData.contato.telefone) companyData.contato.telefone = telFiscal;
-                }
-                companyData.socios = (fiscalData.qsa || []).map(s => ({
-                    nome: s.nome_socio,
-                    qualificacao: s.qualificacao_socio
-                }));
-                companyData.endereco.bairro = fiscalData.bairro;
-                companyData.endereco.cep = fiscalData.cep;
-                companyData.endereco.logradouro = `${fiscalData.descricao_tipo_de_logradouro} ${fiscalData.logradouro}`;
-                companyData.endereco.numero = fiscalData.numero;
-                companyData.endereco.uf = fiscalData.uf;
-                companyData.score_enrichment = 100;
-            } else {
-                companyData.score_enrichment = 60;
+                    companyData.capital_social = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(officialData.company.equity);
+                } catch (e) { companyData.capital_social = officialData.company.equity; }
             }
-        }
+
+            companyData.porte = officialData.company?.size?.text || "---";
+
+            // Contatos (CNPJa é excelente nisso)
+            if (officialData.emails && officialData.emails.length > 0) {
+                companyData.contato.email = officialData.emails[0].address;
+            }
+            if (officialData.phones && officialData.phones.length > 0) {
+                const ph = officialData.phones[0];
+                companyData.contato.telefone = `(${ph.area}) ${ph.number}`; // Prioriza telefone oficial
+            }
+
+            // Endereço Oficial
+            if (officialData.address) {
+                companyData.endereco.logradouro = `${officialData.address.street}, ${officialData.address.number}`;
+                companyData.endereco.bairro = officialData.address.district;
+                companyData.endereco.municipio = officialData.address.city;
+                companyData.endereco.uf = officialData.address.state;
+                companyData.endereco.cep = officialData.address.zip;
+            }
+
+            // Sócios (API retorna na estrutura members)
+            /* Nota: A estrutura 'records' da lista '/office' às vezes não traz os sócios detalhados dependendo do plano,
+               mas se vier, mapeamos. Se não, precisaríamos chamar /company/{id}, mas para performance vamos manter a lista.
+               A CNPJa geralmente retorna o quadro societário na busca detalhada. 
+               Para busca em lista, verificamos se 'company.members' existe. */
+            if (officialData.company?.members) {
+                companyData.socios = officialData.company.members.map(m => ({
+                    nome: m.person?.name || "Sócio",
+                    qualificacao: m.role?.text || "Sócio"
+                }));
+            }
+
+            companyData.score_enrichment = 100;
+        } 
     } catch (e) {
         console.error(`Erro processando ${rawName}`, e.message);
     }
@@ -163,14 +191,12 @@ async function processLead(place, niche, location) {
 app.get('/api/status', (req, res) => {
     res.json({
         status: 'online',
-        mode: 'job_queue',
-        google_key_configured: !!GOOGLE_API_KEY
+        mode: 'cnpja_official',
+        google_key_configured: !!GOOGLE_API_KEY,
+        cnpja_key_configured: !!CNPJA_API_KEY
     });
 });
 
-/**
- * PASSO 1: INICIAR O TRABALHO (Retorna rápido)
- */
 app.post('/api/start-search', async (req, res) => {
     const { niche, location } = req.body;
     
@@ -180,7 +206,6 @@ app.post('/api/start-search', async (req, res) => {
 
     const jobId = crypto.randomUUID();
     
-    // Cria o Job na memória
     jobs[jobId] = {
         id: jobId,
         startTime: Date.now(),
@@ -189,20 +214,17 @@ app.post('/api/start-search', async (req, res) => {
         error: null
     };
 
-    // Responde IMEDIATAMENTE para o frontend não dar timeout
     res.json({ jobId, message: "Busca iniciada em background" });
 
-    // --- WORKER: Executa o processo pesado em background ---
     (async () => {
         try {
-            console.log(`[JOB ${jobId}] Iniciando busca: ${niche} - ${location}`);
+            console.log(`[JOB ${jobId}] Iniciando busca Google: ${niche} - ${location}`);
             
-            // Busca no Google (Limitada para não demorar séculos no background)
             const googleResponse = await axios.post(
                 'https://places.googleapis.com/v1/places:searchText',
                 {
                     textQuery: `${niche} em ${location}`,
-                    pageSize: 8 // Busca 8 por vez para ser ágil
+                    pageSize: 8 
                 },
                 {
                     headers: {
@@ -221,14 +243,12 @@ app.post('/api/start-search', async (req, res) => {
                  return;
             }
 
-            // Processa um por um
             for (const place of places) {
-                // Verifica se o job ainda existe (pode ter expirado)
                 if (!jobs[jobId]) break;
-
+                // Delay minúsculo apenas para não sobrecarregar em caso de muitos requests
+                await wait(200); 
                 const result = await processLead(place, niche, location);
                 
-                // Adiciona ao array de resultados do Job
                 if (jobs[jobId]) {
                     jobs[jobId].results.push(result);
                 }
@@ -236,7 +256,7 @@ app.post('/api/start-search', async (req, res) => {
 
             if (jobs[jobId]) {
                 jobs[jobId].status = 'completed';
-                console.log(`[JOB ${jobId}] Concluído com ${jobs[jobId].results.length} resultados.`);
+                console.log(`[JOB ${jobId}] Concluído.`);
             }
 
         } catch (error) {
@@ -249,9 +269,6 @@ app.post('/api/start-search', async (req, res) => {
     })();
 });
 
-/**
- * PASSO 2: CHECAR PROGRESSO (Polling)
- */
 app.get('/api/check-search/:id', (req, res) => {
     const jobId = req.params.id;
     const job = jobs[jobId];
