@@ -123,83 +123,92 @@ function isLeadQualified(lead) {
 }
 
 async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
-    // Se ufs for string unica, transforma em array
     const targetUfs = Array.isArray(ufs) ? ufs : [ufs];
     const allResults = [];
-
-    // Limite de segurança para não estourar tempo
+    
+    // Limite de segurança
     const MAX_UFS_TO_SEARCH = targetUfs.length > 3 ? 3 : targetUfs.length; 
+    
+    // Configuração do Deep Scan (Paginação)
+    // Se for busca por cidade específica, procuramos mais fundo (até 10 páginas = 1000 empresas)
+    const MAX_PAGES_PER_UF = cityFilter ? 10 : 2; 
 
     for (let i = 0; i < MAX_UFS_TO_SEARCH; i++) {
         const uf = targetUfs[i];
-        
-        console.log(`[CNPJa] Buscando ${niche} em ${uf} (Com Email/Tel Obrigatórios)...`);
+        let nextToken = null;
+        let pageCount = 0;
+        let foundInUf = 0;
 
-        const params = {
-            'alias.in': niche,
-            'address.state.in': uf,
-            'status.id.in': 2, // Apenas ATIVA
-            'emails.ex': true, // OBRIGATÓRIO TER EMAIL (Filtro na API)
-            'phones.ex': true, // OBRIGATÓRIO TER TELEFONE (Filtro na API)
-            limit: 100 // AUMENTADO PARA 100 (Máximo) para achar cidades especificas
-        };
-        
-        try {
-            // Tentativa 1: Nome Fantasia
-            let response = await axios.get('https://api.cnpja.com/office', {
-                headers: { 'Authorization': CNPJA_API_KEY },
-                params: params,
-                timeout: 30000 // Aumentado para 30s
-            });
+        console.log(`[CNPJa] Iniciando Deep Scan em ${uf} para: ${niche} (Cidade alvo: ${cityFilter || 'Todas'})...`);
 
-            let records = response.data.records || [];
+        do {
+            const params = {
+                'address.state.in': uf,
+                'status.id.in': 2, // Apenas ATIVA
+                'emails.ex': true, // OBRIGATÓRIO TER EMAIL
+                'phones.ex': true, // OBRIGATÓRIO TER TELEFONE
+                limit: 100 // Máximo por página
+            };
 
-            // Tentativa 2: Razão Social (se vier pouco na primeira)
-            if (records.length < 20) {
-                delete params['alias.in'];
-                params['company.name.in'] = niche;
-                try {
-                    const response2 = await axios.get('https://api.cnpja.com/office', {
-                        headers: { 'Authorization': CNPJA_API_KEY },
-                        params: params,
-                        timeout: 30000
-                    });
-                    const moreRecords = response2.data.records || [];
-                    // Junta sem duplicatas
-                    const existingIds = new Set(records.map(r => r.taxId));
-                    moreRecords.forEach(r => {
-                        if (!existingIds.has(r.taxId)) records.push(r);
-                    });
-                } catch (e) { /* ignore */ }
+            // Se tiver token de paginação, usa ele
+            if (nextToken) {
+                params.token = nextToken;
+            } else {
+                // Primeira página: configura termos de busca
+                // Tenta buscar por termo genérico "niche" nos nomes
+                params['names.in'] = niche;
+            }
+            
+            try {
+                const response = await axios.get('https://api.cnpja.com/office', {
+                    headers: { 'Authorization': CNPJA_API_KEY },
+                    params: params,
+                    timeout: 45000 // Timeout longo para garantir
+                });
+
+                const records = response.data.records || [];
+                nextToken = response.data.next; // Pega o token para a próxima página
+                pageCount++;
+
+                // Mapeia e Filtra
+                const mapped = records.map(r => mapCnpjaToSystem(r, niche));
+                
+                const filtered = mapped.filter(lead => {
+                    // 1. Filtro de Qualificação
+                    if (!isLeadQualified(lead)) return false;
+
+                    // 2. Filtro de Cidade (CRÍTICO)
+                    if (cityFilter) {
+                        const leadCity = normalizeString(lead.endereco.municipio);
+                        const targetCity = normalizeString(cityFilter);
+                        
+                        // Verifica se a cidade bate
+                        if (!leadCity.includes(targetCity) && !targetCity.includes(leadCity)) return false;
+                    }
+
+                    return true;
+                });
+
+                allResults.push(...filtered);
+                foundInUf += filtered.length;
+                
+                console.log(`[CNPJa] ${uf} Página ${pageCount}: Encontrados ${filtered.length} leads qualificados de ${records.length} brutos.`);
+
+                // Se já achou o suficiente nesta UF, para de paginar
+                if (foundInUf >= 50) break;
+
+            } catch (error) {
+                console.error(`Erro buscando em ${uf} na página ${pageCount}:`, error.message);
+                break; // Se der erro, pula para próxima UF
             }
 
-            // Processamento e Filtragem Rigorosa
-            const mapped = records.map(r => mapCnpjaToSystem(r, niche));
-            
-            const filtered = mapped.filter(lead => {
-                // 1. Filtro de Qualificação (Email + Telefone) - Redundante mas seguro
-                if (!isLeadQualified(lead)) return false;
+            // Delayzinho para não tomar Rate Limit da API
+            await new Promise(r => setTimeout(r, 200));
 
-                // 2. Filtro de Cidade (Se aplicável)
-                if (cityFilter) {
-                    const leadCity = normalizeString(lead.endereco.municipio);
-                    const targetCity = normalizeString(cityFilter);
-                    
-                    // Lógica estrita: A cidade TEM que bater
-                    if (!leadCity.includes(targetCity) && !targetCity.includes(leadCity)) return false;
-                }
-
-                return true;
-            });
-
-            allResults.push(...filtered);
-
-        } catch (error) {
-            console.error(`Erro buscando em ${uf}:`, error.message);
-        }
+        } while (nextToken && pageCount < MAX_PAGES_PER_UF);
         
-        // Se já achou o suficiente, para
-        if (allResults.length >= 50) break;
+        // Se já temos total suficiente globalmente, para
+        if (allResults.length >= 100) break;
     }
 
     return allResults;
@@ -209,23 +218,22 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
 // --- ROTAS ---
 
 app.get('/api/status', (req, res) => {
-    console.log('[STATUS] Wake Up call recebido!');
+    // Resposta ultra leve para wake up
     res.json({ status: 'online' });
 });
 
 app.post('/api/start-search', async (req, res) => {
-    // 1. Responde IMEDIATAMENTE para evitar timeout do navegador
     const jobId = crypto.randomUUID();
     jobs[jobId] = { id: jobId, startTime: Date.now(), status: 'running', results: [], error: null };
     
-    // ENVIA A RESPOSTA AGORA - Antes de qualquer lógica
+    // RESPOSTA IMEDIATA (Critical para evitar timeout do Render/Browser)
     res.json({ jobId, message: "Busca iniciada" });
 
-    // 2. Processa em background COM DELAY para liberar o Event Loop e garantir que a resposta HTTP saia
+    // Processamento Assíncrono Desacoplado
+    // setTimeout(0) coloca isso no final do Event Loop, garantindo que o res.json saia antes.
     setTimeout(async () => {
         const { niche, location, region_type, selected_uf, selected_region } = req.body;
         
-        // Tratamento de parâmetros dependendo do tipo de busca
         let targetUfs = [];
         let cityFilter = null;
 
@@ -243,15 +251,16 @@ app.post('/api/start-search', async (req, res) => {
         }
 
         try {
-            console.log(`[JOB ${jobId}] Iniciando (Delayed). Tipo: ${region_type}. Nicho: ${niche}`);
+            console.log(`[JOB ${jobId}] Iniciando Deep Scan. Tipo: ${region_type}. Nicho: ${niche}`);
 
-            // Busca diretamente na CNPJa
             const results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter);
             
             if (results.length > 0) {
                 jobs[jobId].results.push(...results);
             } else {
-                jobs[jobId].error = `Nenhum lead qualificado (com Email e Telefone) encontrado para "${niche}" nesta localização.`;
+                let msg = `Nenhum lead com Email e Telefone encontrado para "${niche}"`;
+                if (cityFilter) msg += ` em ${cityFilter}`;
+                jobs[jobId].error = msg + ". Tente expandir para o Estado.";
             }
 
         } catch (error) {
@@ -260,7 +269,7 @@ app.post('/api/start-search', async (req, res) => {
         } finally {
             jobs[jobId].status = 'completed';
         }
-    }, 500); // 500ms de delay para garantir flush da rede
+    }, 100); 
 });
 
 app.get('/api/check-search/:id', (req, res) => {
