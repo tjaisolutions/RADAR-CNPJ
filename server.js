@@ -36,8 +36,6 @@ setInterval(() => {
     }
 }, 600000);
 
-const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 // --- MAPAS DE REGIÃO ---
 const REGION_MAP = {
     'SUDESTE': ['SP', 'RJ', 'MG', 'ES'],
@@ -151,7 +149,7 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
             let response = await axios.get('https://api.cnpja.com/office', {
                 headers: { 'Authorization': CNPJA_API_KEY },
                 params: params,
-                timeout: 20000 // 20s timeout
+                timeout: 30000 // Aumentado para 30s
             });
 
             let records = response.data.records || [];
@@ -164,7 +162,7 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
                     const response2 = await axios.get('https://api.cnpja.com/office', {
                         headers: { 'Authorization': CNPJA_API_KEY },
                         params: params,
-                        timeout: 20000
+                        timeout: 30000
                     });
                     const moreRecords = response2.data.records || [];
                     // Junta sem duplicatas
@@ -211,10 +209,17 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
 // --- ROTAS ---
 
 app.get('/api/status', (req, res) => {
+    console.log('[STATUS] Wake Up call recebido!');
     res.json({ status: 'online' });
 });
 
 app.post('/api/start-search', async (req, res) => {
+    // 1. Responde IMEDIATAMENTE para evitar timeout do navegador
+    const jobId = crypto.randomUUID();
+    jobs[jobId] = { id: jobId, startTime: Date.now(), status: 'running', results: [], error: null };
+    res.json({ jobId, message: "Busca iniciada" });
+
+    // 2. Processa em background
     const { niche, location, region_type, selected_uf, selected_region } = req.body;
     
     // Tratamento de parâmetros dependendo do tipo de busca
@@ -223,10 +228,9 @@ app.post('/api/start-search', async (req, res) => {
 
     if (region_type === 'cidade') {
         targetUfs = [selected_uf || 'SP'];
-        // Remove a UF da string location se ela vier "Boituva SP" -> "Boituva"
         const parts = location.split(' ');
         if (parts.length > 1 && parts[parts.length-1].length === 2) {
-             parts.pop(); // Tira a UF
+             parts.pop(); 
         }
         cityFilter = parts.join(' ').replace(',', '').trim();
     } else if (region_type === 'estado') {
@@ -234,11 +238,6 @@ app.post('/api/start-search', async (req, res) => {
     } else if (region_type === 'regiao') {
         targetUfs = REGION_MAP[selected_region] || ['SP'];
     }
-
-    const jobId = crypto.randomUUID();
-    jobs[jobId] = { id: jobId, startTime: Date.now(), status: 'running', results: [], error: null };
-
-    res.json({ jobId, message: "Busca iniciada" });
 
     (async () => {
         try {
@@ -250,7 +249,7 @@ app.post('/api/start-search', async (req, res) => {
             if (results.length > 0) {
                 jobs[jobId].results.push(...results);
             } else {
-                jobs[jobId].error = `Nenhum lead qualificado encontrado. Tente buscar em uma região maior (ex: Estado) ou outro nicho.`;
+                jobs[jobId].error = `Nenhum lead qualificado (com Email e Telefone) encontrado para "${niche}" nesta localização.`;
             }
 
         } catch (error) {
