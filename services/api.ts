@@ -26,14 +26,17 @@ const fetchWithRetry = async (url: string, options: RequestInit = {}, retries = 
 
       // Se for erro 500/502/503/504 (Erros de servidor/Gateway), tenta de novo
       if (res.status >= 500) {
-        console.warn(`[API] Erro ${res.status}. Tentativa ${i + 1}/${retries}...`);
+        console.log(`[API] Aguardando servidor (${res.status})... Tentativa ${i + 1}/${retries}`);
       } else {
         // Se for 400/404, é erro de lógica, não de conexão. Retorna para tratar.
         return res; 
       }
     } catch (err: any) {
       // Pega erros de rede (Network Error, Failed to fetch, Load failed)
-      console.warn(`[API] Falha de Rede (${err.message}). O servidor pode estar acordando. Tentativa ${i + 1}/${retries}...`);
+      // Apenas loga aviso nas últimas tentativas para não assustar no console
+      if (i > 5) {
+          console.warn(`[API] Reconectando... (${err.message}). Tentativa ${i + 1}/${retries}`);
+      }
     }
 
     // Se chegou aqui, é porque deu erro. Espera e tenta de novo.
@@ -95,7 +98,7 @@ export const prospectLeads = async (
             
             if (!checkRes.ok) {
                 if (checkRes.status === 404) throw new Error("O processo foi interrompido pelo servidor.");
-                console.warn("Falha temporária no polling...");
+                // Falha temporária no polling ignora e continua
                 continue;
             }
 
@@ -120,7 +123,7 @@ export const prospectLeads = async (
                 isFinished = true;
             }
         } catch (pollError) {
-            console.warn("Erro no polling, tentando novamente...", pollError);
+            // Silencia erros de polling temporários
             if (attempts % 10 === 0 && emptyResponses > 30) isFinished = true; 
         }
     }
