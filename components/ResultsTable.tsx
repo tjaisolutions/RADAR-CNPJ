@@ -1,6 +1,6 @@
 import React from 'react';
 import { EnrichedCompany } from '../types';
-import { Download, Building2, Phone, Mail, MapPin, Users, DollarSign, CheckCircle2, AlertCircle, SearchX, ShieldCheck } from 'lucide-react';
+import { Download, Building2, Phone, Mail, MapPin, Users, DollarSign, CheckCircle2, AlertCircle, SearchX, ShieldCheck, Filter } from 'lucide-react';
 
 interface ResultsTableProps {
   data: EnrichedCompany[];
@@ -10,7 +10,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
   const handleExport = () => {
     if (data.length === 0) return;
 
-    const headers = ["CNPJ", "Razão Social", "Fantasia", "Nicho", "Email", "Telefone", "Cidade", "UF", "Capital Social", "Sócios"];
+    const headers = ["CNPJ", "Razão Social", "Fantasia", "Nicho", "Email", "Telefone", "Cidade", "UF", "Capital Social", "CNAE", "Sócios"];
     const csvContent = [
       headers.join(","),
       ...data.map(c => [
@@ -23,6 +23,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
         `"${c.endereco.municipio}"`,
         `"${c.endereco.uf}"`,
         `"${c.capital_social}"`,
+        `"${c.cnae || ''}"`,
         `"${c.socios.map(s => s.nome).join('; ')}"`
       ].join(","))
     ].join("\n");
@@ -31,7 +32,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `leads_cnpja_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `leads_qualificados_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -44,7 +45,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
             <Building2 className="w-8 h-8 opacity-40 text-slate-500" />
         </div>
         <p className="font-medium text-slate-600">Aguardando Prospecção</p>
-        <p className="text-sm">Os dados oficiais aparecerão aqui automaticamente.</p>
+        <p className="text-sm">Os leads qualificados (com email e telefone) aparecerão aqui.</p>
       </div>
     );
   }
@@ -55,13 +56,13 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
         <div>
            <h3 className="font-bold text-slate-800 flex items-center gap-2">
              Resultados da Prospecção
-             <span className="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded-full border border-indigo-200 flex items-center gap-1">
-               <ShieldCheck className="w-3 h-3" />
-               API Oficial
+             <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full border border-green-200 flex items-center gap-1">
+               <Filter className="w-3 h-3" />
+               Filtrado: Email & Tel
              </span>
            </h3>
            <p className="text-xs text-slate-500 mt-1">
-              {data.filter(d => d.cnpj).length} CNPJs validados de {data.length} leads
+              {data.length} leads enriquecidos encontrados na base oficial
            </p>
         </div>
         
@@ -87,25 +88,14 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {data.map((company, index) => {
-                const hasFullData = company.score_enrichment >= 80;
-                const hasCnpj = !!company.cnpj;
+                const hasFullData = company.contato.email && company.contato.telefone;
 
                 return (
                   <tr key={index} className="hover:bg-slate-50 transition-colors group">
                     <td className="p-4 w-12 text-center">
-                        {hasFullData ? (
-                            <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center mx-auto" title="Verificado na Receita Federal">
-                                <CheckCircle2 className="w-5 h-5" />
-                            </div>
-                        ) : hasCnpj ? (
-                             <div className="w-8 h-8 rounded-full bg-yellow-100 text-yellow-600 flex items-center justify-center mx-auto" title="Parcial (CNPJ encontrado, dados limitados)">
-                                <AlertCircle className="w-5 h-5" />
-                            </div>
-                        ) : (
-                            <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto" title="Não encontrado na base oficial">
-                                <SearchX className="w-5 h-5" />
-                            </div>
-                        )}
+                        <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center mx-auto" title="Contato Completo">
+                            <CheckCircle2 className="w-5 h-5" />
+                        </div>
                     </td>
                     <td className="p-4">
                       <div className="flex flex-col max-w-[250px]">
@@ -116,21 +106,18 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                              <span className="text-xs text-red-400 italic mt-0.5">Não localizado</span>
                         )}
                         <span className="text-[10px] text-indigo-600 mt-1">{company.nicho}</span>
+                        <span className="text-[10px] text-slate-400 mt-1 truncate" title={company.cnae}>CNAE: {company.cnae}</span>
                       </div>
                     </td>
                     <td className="p-4">
-                      {hasFullData ? (
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-1.5 text-slate-700">
-                                <DollarSign className="w-3.5 h-3.5 text-green-600" />
-                                <span className="font-medium">{company.capital_social}</span>
-                            </div>
-                            <span className="text-xs text-slate-500">Porte: {company.porte}</span>
-                            <span className="text-[10px] text-slate-400">Desde: {company.data_abertura}</span>
-                          </div>
-                      ) : (
-                          <span className="text-xs text-slate-400">---</span>
-                      )}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5 text-slate-700">
+                            <DollarSign className="w-3.5 h-3.5 text-green-600" />
+                            <span className="font-medium">{company.capital_social}</span>
+                        </div>
+                        <span className="text-xs text-slate-500">Porte: {company.porte}</span>
+                        <span className="text-[10px] text-slate-400">Desde: {company.data_abertura}</span>
+                      </div>
                     </td>
                     <td className="p-4 max-w-xs">
                          {company.socios.length > 0 ? (
@@ -149,13 +136,11 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                     </td>
                     <td className="p-4">
                       <div className="flex flex-col gap-1.5">
-                        {company.contato.email ? (
+                        {company.contato.email && (
                           <div className="flex items-center gap-2 text-indigo-600 font-medium">
                             <Mail className="w-3.5 h-3.5" />
                             <span className="truncate max-w-[150px] text-xs" title={company.contato.email}>{company.contato.email}</span>
                           </div>
-                        ) : (
-                            <span className="text-xs text-slate-400 flex items-center gap-2"><Mail className="w-3.5 h-3.5" /> Sem email</span>
                         )}
                         {company.contato.telefone && (
                           <div className="flex items-center gap-2 text-slate-600">
