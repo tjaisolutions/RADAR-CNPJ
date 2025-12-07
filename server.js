@@ -176,7 +176,7 @@ async function searchGoogleAndEnrich(niche, city, uf) {
 
         if (places.length === 0) return null; // Retorna null para ativar fallback
 
-        // 2. Enriquecimento via CNPJa (Com Rate Limit Controlado)
+        // 2. Enriquecimento via CNPJa (Com Rate Limit Controlado e Validação de Cidade)
         for (const place of places) {
             const companyName = place.displayName.text;
             
@@ -192,14 +192,24 @@ async function searchGoogleAndEnrich(niche, city, uf) {
                         limit: 1
                     },
                     timeout: 20000
-                }, 3, 1500); // 3 tentativas, 1.5s de delay base
+                }, 3, 4000); // 3 tentativas, 4s de delay base (Mais lento para evitar 429)
 
                 const records = cnpjaResponse.data.records || [];
                 
                 if (records.length > 0) {
                     const lead = mapCnpjaToSystem(records[0], niche, 'google_enriched');
+                    
+                    // Validação Estrita de Cidade (Evita Matriz em outra cidade)
+                    const leadCity = normalizeString(lead.endereco.municipio);
+                    const targetCity = normalizeString(city);
+
                     if (isLeadQualified(lead)) {
-                        results.push(lead);
+                         // Verifica se a cidade do lead contem a cidade alvo ou vice versa
+                         if (leadCity.includes(targetCity) || targetCity.includes(leadCity)) {
+                            results.push(lead);
+                         } else {
+                            console.log(`[SNIPER] Ignorado: ${lead.nome_fantasia} é de ${lead.endereco.municipio} (Alvo: ${city})`);
+                         }
                     }
                 }
 
