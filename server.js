@@ -217,31 +217,33 @@ app.post('/api/start-search', async (req, res) => {
     // 1. Responde IMEDIATAMENTE para evitar timeout do navegador
     const jobId = crypto.randomUUID();
     jobs[jobId] = { id: jobId, startTime: Date.now(), status: 'running', results: [], error: null };
+    
+    // ENVIA A RESPOSTA AGORA - Antes de qualquer lógica
     res.json({ jobId, message: "Busca iniciada" });
 
-    // 2. Processa em background
-    const { niche, location, region_type, selected_uf, selected_region } = req.body;
-    
-    // Tratamento de parâmetros dependendo do tipo de busca
-    let targetUfs = [];
-    let cityFilter = null;
+    // 2. Processa em background COM DELAY para liberar o Event Loop e garantir que a resposta HTTP saia
+    setTimeout(async () => {
+        const { niche, location, region_type, selected_uf, selected_region } = req.body;
+        
+        // Tratamento de parâmetros dependendo do tipo de busca
+        let targetUfs = [];
+        let cityFilter = null;
 
-    if (region_type === 'cidade') {
-        targetUfs = [selected_uf || 'SP'];
-        const parts = location.split(' ');
-        if (parts.length > 1 && parts[parts.length-1].length === 2) {
-             parts.pop(); 
+        if (region_type === 'cidade') {
+            targetUfs = [selected_uf || 'SP'];
+            const parts = location.split(' ');
+            if (parts.length > 1 && parts[parts.length-1].length === 2) {
+                 parts.pop(); 
+            }
+            cityFilter = parts.join(' ').replace(',', '').trim();
+        } else if (region_type === 'estado') {
+            targetUfs = [selected_uf];
+        } else if (region_type === 'regiao') {
+            targetUfs = REGION_MAP[selected_region] || ['SP'];
         }
-        cityFilter = parts.join(' ').replace(',', '').trim();
-    } else if (region_type === 'estado') {
-        targetUfs = [selected_uf];
-    } else if (region_type === 'regiao') {
-        targetUfs = REGION_MAP[selected_region] || ['SP'];
-    }
 
-    (async () => {
         try {
-            console.log(`[JOB ${jobId}] Iniciando. Tipo: ${region_type}. Nicho: ${niche}`);
+            console.log(`[JOB ${jobId}] Iniciando (Delayed). Tipo: ${region_type}. Nicho: ${niche}`);
 
             // Busca diretamente na CNPJa
             const results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter);
@@ -258,7 +260,7 @@ app.post('/api/start-search', async (req, res) => {
         } finally {
             jobs[jobId].status = 'completed';
         }
-    })();
+    }, 500); // 500ms de delay para garantir flush da rede
 });
 
 app.get('/api/check-search/:id', (req, res) => {
