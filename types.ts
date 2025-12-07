@@ -1,46 +1,46 @@
-
-export interface Company {
-  id: string;
+export interface EnrichedCompany {
   cnpj: string;
-  razaoSocial: string;
-  nomeFantasia: string;
-  dataAbertura: string; // ISO String
-  cnaePrincipal: string;
-  cnaeDescricao: string;
-  naturezaJuridica: string;
-  uf: string;
-  municipio: string;
-  email: string | null;
-  telefone: string | null;
-  capitalSocial: number;
-  status: 'active' | 'pending';
-  // UI helper props
-  isContacted?: boolean;
-  notes?: string;
-  source?: 'simulation' | 'manual' | 'cnpja' | 'api' | 'infosimples' | 'cnpj_ws_comercial';
+  razao_social: string;
+  nome_fantasia: string;
+  nicho: string;
+  status: 'Ativa' | 'Baixada' | 'Inapta';
+  data_abertura: string;
+  capital_social: string;
+  porte: string;
+  socios: Array<{
+    nome: string;
+    qualificacao: string;
+  }>;
+  endereco: {
+    logradouro: string;
+    numero: string;
+    bairro: string;
+    municipio: string;
+    uf: string;
+    cep: string;
+  };
+  contato: {
+    email: string | null;
+    telefone: string | null;
+    site?: string;
+  };
+  cnae?: string;
+  score_enrichment: number; // 0 a 100 indicando qualidade dos dados
+  origin?: string;
 }
 
-export interface FilterState {
-  uf: string;
-  cnae: string;
-  onlyWithContact: boolean;
+export interface SearchQuery {
+  niche: string;
+  location: string; // Usado para cidade ou UF dependendo do tipo
+  region_type: 'cidade' | 'estado' | 'regiao';
+  selected_uf?: string;
+  selected_region?: string;
 }
 
-export enum LeadStatus {
-  NEW = 'Novo',
-  CONTACTED = 'Contatado',
-  QUALIFIED = 'Qualificado',
-  LOST = 'Perdido'
-}
-
-export interface AnalysisResult {
-  strategy: string;
-  emailDraft: string;
-  potentialPainPoints: string[];
-}
-
-export interface AppConfig {
-  mode: 'simulation' | 'manual' | 'cnpja';
-  refreshInterval: number;
-  apiKey: string;
+export interface SearchHistoryItem {
+  id: string;
+  query: SearchQuery;
+  timestamp: number;
+  resultCount: number;
+  results: EnrichedCompany[];
 }
