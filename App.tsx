@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { EnrichedCompany, SearchHistoryItem, SearchQuery } from './types';
-import { prospectLeads } from './services/api';
+import { prospectLeads, checkApiStatus } from './services/api';
 import ResultsTable from './components/ResultsTable';
 import HistorySidebar from './components/HistorySidebar';
-import { Menu, Layers, Loader2, Search, MapPin, Briefcase, Zap, AlertTriangle, Building, Map, Globe } from 'lucide-react';
+import { Menu, Layers, Loader2, Search, MapPin, Briefcase, Zap, AlertTriangle, Building, Map, Globe, Wifi, WifiOff } from 'lucide-react';
 
 const REGIONS = [
     { label: 'Sudeste (SP, RJ, MG, ES)', value: 'SUDESTE' },
@@ -30,8 +30,12 @@ function App() {
   const [history, setHistory] = useState<SearchHistoryItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Status do Servidor
+  const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
 
   useEffect(() => {
+    // Carrega histórico
     const savedHistory = localStorage.getItem('lead_search_history');
     if (savedHistory) {
       try {
@@ -40,6 +44,15 @@ function App() {
         console.error("Failed to parse history", e);
       }
     }
+
+    // WAKE UP: Tenta acordar o servidor assim que a página carrega
+    const wakeUpServer = async () => {
+        setServerStatus('checking');
+        const status = await checkApiStatus();
+        setServerStatus(status.status === 'online' ? 'online' : 'offline');
+    };
+    wakeUpServer();
+
   }, []);
 
   useEffect(() => {
@@ -63,7 +76,7 @@ function App() {
     else if (searchScope === 'estado') locationString = selectedState;
     else locationString = selectedRegion;
 
-    setLoadingMsg(`Buscando ${niche} em ${locationString}...`);
+    setLoadingMsg(`Conectando ao servidor e buscando ${niche}... (Isso pode levar alguns segundos se o servidor estiver acordando)`);
     
     let leadsCount = 0;
     const tempResults: EnrichedCompany[] = [];
@@ -78,6 +91,7 @@ function App() {
       };
       
       await prospectLeads(query, (newLead) => {
+          setLoadingMsg('Processando leads...');
           // Filtra duplicatas na UI
           setCurrentResults(prev => {
               if (prev.some(p => p.cnpj === newLead.cnpj)) return prev;
@@ -103,10 +117,13 @@ function App() {
             results: tempResults
         };
         setHistory(prev => [newHistoryItem, ...prev]);
+        setServerStatus('online');
       }
 
     } catch (err: any) {
       console.error("App Error:", err);
+      // Se deu erro, provavelmente caiu a conexão ou servidor deu timeout
+      setServerStatus('offline');
       if (leadsCount === 0) {
         setError(err.message || "O servidor demorou para responder. Tente novamente.");
       }
@@ -165,6 +182,28 @@ function App() {
               <Layers className="w-6 h-6" />
               <h1 className="text-xl font-bold tracking-tight">Lead Enriched <span className="text-indigo-400 font-light">Pro</span></h1>
             </div>
+          </div>
+          
+          {/* Status do Servidor no Header (Mobile/Desktop) */}
+          <div className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200">
+            {serverStatus === 'checking' && (
+                <>
+                    <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
+                    <span className="text-amber-600">Conectando Servidor...</span>
+                </>
+            )}
+            {serverStatus === 'online' && (
+                <>
+                    <Wifi className="w-3 h-3 text-green-500" />
+                    <span className="text-green-600">Servidor Online</span>
+                </>
+            )}
+            {serverStatus === 'offline' && (
+                <>
+                    <WifiOff className="w-3 h-3 text-red-500" />
+                    <span className="text-red-600">Servidor Off (Acordando...)</span>
+                </>
+            )}
           </div>
         </header>
 
@@ -313,7 +352,7 @@ function App() {
             </div>
           )}
 
-          <div className="flex-1 min-h-[400px]">
+          <div className="flex-1 min-h-[400px] mb-6">
             <ResultsTable data={currentResults} />
           </div>
         </div>
