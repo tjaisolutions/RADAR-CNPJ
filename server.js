@@ -51,7 +51,8 @@ const REGION_MAP = {
  * Remove acentos para comparação de strings
  */
 function normalizeString(str) {
-    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (!str) return "";
+    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 
 function mapCnpjaToSystem(record, nicho) {
@@ -134,36 +135,36 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
     for (let i = 0; i < MAX_UFS_TO_SEARCH; i++) {
         const uf = targetUfs[i];
         
-        console.log(`[CNPJa] Buscando ${niche} em ${uf}...`);
+        console.log(`[CNPJa] Buscando ${niche} em ${uf} (Com Email/Tel Obrigatórios)...`);
 
         const params = {
             'alias.in': niche,
             'address.state.in': uf,
             'status.id.in': 2, // Apenas ATIVA
-            limit: 20 // Pega mais para poder filtrar
+            'emails.ex': true, // OBRIGATÓRIO TER EMAIL (Filtro na API)
+            'phones.ex': true, // OBRIGATÓRIO TER TELEFONE (Filtro na API)
+            limit: 100 // AUMENTADO PARA 100 (Máximo) para achar cidades especificas
         };
-        
-        // Se temos cidade especifica, tentamos filtrar (a API aceita codigos IBGE, mas por nome filtraremos depois)
         
         try {
             // Tentativa 1: Nome Fantasia
             let response = await axios.get('https://api.cnpja.com/office', {
                 headers: { 'Authorization': CNPJA_API_KEY },
                 params: params,
-                timeout: 15000
+                timeout: 20000 // 20s timeout
             });
 
             let records = response.data.records || [];
 
-            // Tentativa 2: Razão Social (se vier pouco)
-            if (records.length < 5) {
+            // Tentativa 2: Razão Social (se vier pouco na primeira)
+            if (records.length < 20) {
                 delete params['alias.in'];
                 params['company.name.in'] = niche;
                 try {
                     const response2 = await axios.get('https://api.cnpja.com/office', {
                         headers: { 'Authorization': CNPJA_API_KEY },
                         params: params,
-                        timeout: 15000
+                        timeout: 20000
                     });
                     const moreRecords = response2.data.records || [];
                     // Junta sem duplicatas
@@ -178,14 +179,15 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
             const mapped = records.map(r => mapCnpjaToSystem(r, niche));
             
             const filtered = mapped.filter(lead => {
-                // 1. Filtro de Qualificação (Email + Telefone)
+                // 1. Filtro de Qualificação (Email + Telefone) - Redundante mas seguro
                 if (!isLeadQualified(lead)) return false;
 
                 // 2. Filtro de Cidade (Se aplicável)
                 if (cityFilter) {
                     const leadCity = normalizeString(lead.endereco.municipio);
                     const targetCity = normalizeString(cityFilter);
-                    // Verifica se a cidade do lead contem a cidade alvo ou vice versa (para evitar erros de digitacao leves)
+                    
+                    // Lógica estrita: A cidade TEM que bater
                     if (!leadCity.includes(targetCity) && !targetCity.includes(leadCity)) return false;
                 }
 
@@ -198,8 +200,8 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
             console.error(`Erro buscando em ${uf}:`, error.message);
         }
         
-        // Se já achou bastante, para (para não ficar muito lento)
-        if (allResults.length >= 10) break;
+        // Se já achou o suficiente, para
+        if (allResults.length >= 50) break;
     }
 
     return allResults;
@@ -221,8 +223,12 @@ app.post('/api/start-search', async (req, res) => {
 
     if (region_type === 'cidade') {
         targetUfs = [selected_uf || 'SP'];
-        cityFilter = location.split(' ')[0]; // Pega só o nome da cidade da string "Boituva SP"
-        if (cityFilter.endsWith(',')) cityFilter = cityFilter.slice(0, -1);
+        // Remove a UF da string location se ela vier "Boituva SP" -> "Boituva"
+        const parts = location.split(' ');
+        if (parts.length > 1 && parts[parts.length-1].length === 2) {
+             parts.pop(); // Tira a UF
+        }
+        cityFilter = parts.join(' ').replace(',', '').trim();
     } else if (region_type === 'estado') {
         targetUfs = [selected_uf];
     } else if (region_type === 'regiao') {
@@ -238,13 +244,13 @@ app.post('/api/start-search', async (req, res) => {
         try {
             console.log(`[JOB ${jobId}] Iniciando. Tipo: ${region_type}. Nicho: ${niche}`);
 
-            // Busca diretamente na CNPJa (Mais confiável para dados enriquecidos)
+            // Busca diretamente na CNPJa
             const results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter);
             
             if (results.length > 0) {
                 jobs[jobId].results.push(...results);
             } else {
-                jobs[jobId].error = "Nenhum lead qualificado (com email e telefone) encontrado para os filtros selecionados.";
+                jobs[jobId].error = `Nenhum lead qualificado encontrado. Tente buscar em uma região maior (ex: Estado) ou outro nicho.`;
             }
 
         } catch (error) {
