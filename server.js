@@ -53,7 +53,7 @@ function normalizeString(str) {
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 
-function mapCnpjaToSystem(record, nicho) {
+function mapCnpjaToSystem(record, nicho, origin = 'cnpja_direct') {
     let telefone = null;
     if (record.phones && record.phones.length > 0) {
         // Pega preferencialmente celular
@@ -64,7 +64,6 @@ function mapCnpjaToSystem(record, nicho) {
 
     let email = null;
     if (record.emails && record.emails.length > 0) {
-        // Filtra emails de contadores se possível, mas pega o primeiro disponível
         email = record.emails[0].address;
     }
 
@@ -111,7 +110,7 @@ function mapCnpjaToSystem(record, nicho) {
         },
         cnae: cnae,
         score_enrichment: 100,
-        origin: 'cnpja_direct'
+        origin: origin
     };
 }
 
@@ -122,15 +121,93 @@ function isLeadQualified(lead) {
     return lead.contato.email && lead.contato.telefone;
 }
 
+/**
+ * ESTRATÉGIA SNIPER: Google Places -> CNPJa Enrichment
+ * Usa o Google para achar locais exatos e a CNPJa para pegar dados.
+ */
+async function searchGoogleAndEnrich(niche, city, uf) {
+    console.log(`[SNIPER] Buscando no Google: ${niche} em ${city} ${uf}`);
+    const results = [];
+
+    try {
+        // 1. Busca no Google Places API (New)
+        const googleResponse = await axios.post(
+            'https://places.googleapis.com/v1/places:searchText',
+            {
+                textQuery: `${niche} em ${city} ${uf}`,
+                pageSize: 20 // Pega os top 20 do Google
+            },
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Goog-Api-Key': GOOGLE_API_KEY,
+                    'X-Goog-FieldMask': 'places.displayName,places.formattedAddress'
+                },
+                timeout: 10000
+            }
+        );
+
+        const places = googleResponse.data.places || [];
+        console.log(`[SNIPER] Google encontrou ${places.length} locais.`);
+
+        if (places.length === 0) return null; // Retorna null para ativar fallback
+
+        // 2. Enriquecimento via CNPJa (Com Rate Limit para evitar 429)
+        for (const place of places) {
+            const companyName = place.displayName.text;
+            
+            try {
+                // Delay de 300ms entre chamadas para não estourar rate limit
+                await new Promise(r => setTimeout(r, 300));
+
+                const cnpjaResponse = await axios.get('https://api.cnpja.com/office', {
+                    headers: { 'Authorization': CNPJA_API_KEY },
+                    params: {
+                        'names.in': companyName, // Busca exata pelo nome do Google
+                        'address.state.in': uf,  // Filtra pelo estado correto
+                        'emails.ex': true,       // Obriga Email
+                        'phones.ex': true,       // Obriga Telefone
+                        limit: 1 // Queremos apenas o match exato
+                    },
+                    timeout: 15000
+                });
+
+                const records = cnpjaResponse.data.records || [];
+                
+                if (records.length > 0) {
+                    const lead = mapCnpjaToSystem(records[0], niche, 'google_enriched');
+                    if (isLeadQualified(lead)) {
+                        results.push(lead);
+                    }
+                }
+
+            } catch (enrichErr) {
+                // Se der erro 429 (Too Many Requests), espera um pouco mais
+                if (enrichErr.response && enrichErr.response.status === 429) {
+                    console.log(`[SNIPER] Rate limit atingido. Aguardando...`);
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+                // Ignora falhas individuais de enriquecimento
+            }
+        }
+
+    } catch (err) {
+        console.error(`[SNIPER] Erro no Google Places: ${err.message}`);
+        return null; // Retorna null para indicar que falhou e deve usar fallback
+    }
+
+    return results;
+}
+
+/**
+ * ESTRATÉGIA DEEP SCAN: Busca direta na CNPJa (Backup ou para Estados/Regiões)
+ */
 async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
     const targetUfs = Array.isArray(ufs) ? ufs : [ufs];
     const allResults = [];
     
     // Limite de segurança
     const MAX_UFS_TO_SEARCH = targetUfs.length > 3 ? 3 : targetUfs.length; 
-    
-    // Configuração do Deep Scan (Paginação)
-    // Se for busca por cidade específica, procuramos mais fundo (até 10 páginas = 1000 empresas)
     const MAX_PAGES_PER_UF = cityFilter ? 10 : 2; 
 
     for (let i = 0; i < MAX_UFS_TO_SEARCH; i++) {
@@ -145,17 +222,14 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
             const params = {
                 'address.state.in': uf,
                 'status.id.in': 2, // Apenas ATIVA
-                'emails.ex': true, // OBRIGATÓRIO TER EMAIL
-                'phones.ex': true, // OBRIGATÓRIO TER TELEFONE
-                limit: 100 // Máximo por página
+                'emails.ex': true, 
+                'phones.ex': true,
+                limit: 100 
             };
 
-            // Se tiver token de paginação, usa ele
             if (nextToken) {
                 params.token = nextToken;
             } else {
-                // Primeira página: configura termos de busca
-                // Tenta buscar por termo genérico "niche" nos nomes
                 params['names.in'] = niche;
             }
             
@@ -163,51 +237,41 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
                 const response = await axios.get('https://api.cnpja.com/office', {
                     headers: { 'Authorization': CNPJA_API_KEY },
                     params: params,
-                    timeout: 45000 // Timeout longo para garantir
+                    timeout: 45000 
                 });
 
                 const records = response.data.records || [];
-                nextToken = response.data.next; // Pega o token para a próxima página
+                nextToken = response.data.next; 
                 pageCount++;
 
-                // Mapeia e Filtra
                 const mapped = records.map(r => mapCnpjaToSystem(r, niche));
                 
                 const filtered = mapped.filter(lead => {
-                    // 1. Filtro de Qualificação
                     if (!isLeadQualified(lead)) return false;
-
-                    // 2. Filtro de Cidade (CRÍTICO)
                     if (cityFilter) {
                         const leadCity = normalizeString(lead.endereco.municipio);
                         const targetCity = normalizeString(cityFilter);
-                        
-                        // Verifica se a cidade bate
                         if (!leadCity.includes(targetCity) && !targetCity.includes(leadCity)) return false;
                     }
-
                     return true;
                 });
 
                 allResults.push(...filtered);
                 foundInUf += filtered.length;
                 
-                console.log(`[CNPJa] ${uf} Página ${pageCount}: Encontrados ${filtered.length} leads qualificados de ${records.length} brutos.`);
+                console.log(`[CNPJa] ${uf} Página ${pageCount}: Encontrados ${filtered.length} leads qualificados.`);
 
-                // Se já achou o suficiente nesta UF, para de paginar
                 if (foundInUf >= 50) break;
 
             } catch (error) {
                 console.error(`Erro buscando em ${uf} na página ${pageCount}:`, error.message);
-                break; // Se der erro, pula para próxima UF
+                break; 
             }
 
-            // Delayzinho para não tomar Rate Limit da API
-            await new Promise(r => setTimeout(r, 200));
+            await new Promise(r => setTimeout(r, 500)); // Delay aumentado para evitar 429
 
         } while (nextToken && pageCount < MAX_PAGES_PER_UF);
         
-        // Se já temos total suficiente globalmente, para
         if (allResults.length >= 100) break;
     }
 
@@ -218,7 +282,6 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
 // --- ROTAS ---
 
 app.get('/api/status', (req, res) => {
-    // Resposta ultra leve para wake up
     res.json({ status: 'online' });
 });
 
@@ -226,16 +289,15 @@ app.post('/api/start-search', async (req, res) => {
     const jobId = crypto.randomUUID();
     jobs[jobId] = { id: jobId, startTime: Date.now(), status: 'running', results: [], error: null };
     
-    // RESPOSTA IMEDIATA (Critical para evitar timeout do Render/Browser)
+    // RESPOSTA IMEDIATA
     res.json({ jobId, message: "Busca iniciada" });
 
-    // Processamento Assíncrono Desacoplado
-    // setTimeout(0) coloca isso no final do Event Loop, garantindo que o res.json saia antes.
     setTimeout(async () => {
         const { niche, location, region_type, selected_uf, selected_region } = req.body;
         
         let targetUfs = [];
         let cityFilter = null;
+        let cityName = "";
 
         if (region_type === 'cidade') {
             targetUfs = [selected_uf || 'SP'];
@@ -243,7 +305,8 @@ app.post('/api/start-search', async (req, res) => {
             if (parts.length > 1 && parts[parts.length-1].length === 2) {
                  parts.pop(); 
             }
-            cityFilter = parts.join(' ').replace(',', '').trim();
+            cityName = parts.join(' ').replace(',', '').trim();
+            cityFilter = cityName;
         } else if (region_type === 'estado') {
             targetUfs = [selected_uf];
         } else if (region_type === 'regiao') {
@@ -251,11 +314,23 @@ app.post('/api/start-search', async (req, res) => {
         }
 
         try {
-            console.log(`[JOB ${jobId}] Iniciando Deep Scan. Tipo: ${region_type}. Nicho: ${niche}`);
+            console.log(`[JOB ${jobId}] Iniciando. Tipo: ${region_type}. Nicho: ${niche}`);
 
-            const results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter);
+            let results = null;
+
+            // 1. TENTA ESTRATÉGIA SNIPER (GOOGLE) SE FOR BUSCA POR CIDADE
+            if (region_type === 'cidade' && cityName) {
+                results = await searchGoogleAndEnrich(niche, cityName, targetUfs[0]);
+            }
+
+            // 2. FALLBACK PARA DEEP SCAN (CNPJa DIRETO)
+            // Se o Google falhou (null) ou retornou vazio, ou se é busca por Estado/Região
+            if (!results || results.length === 0) {
+                if (region_type === 'cidade') console.log(`[JOB ${jobId}] Sniper falhou ou sem resultados. Ativando Deep Scan (CNPJa Direto)...`);
+                results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter);
+            }
             
-            if (results.length > 0) {
+            if (results && results.length > 0) {
                 jobs[jobId].results.push(...results);
             } else {
                 let msg = `Nenhum lead com Email e Telefone encontrado para "${niche}"`;
