@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Proteção contra crash do servidor
+// Proteção contra crash
 process.on('uncaughtException', (err) => {
   console.error('[SERVER CRASH PREVENTED]:', err);
 });
@@ -17,7 +17,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[UNHANDLED REJECTION]:', reason);
 });
 
-// Chaves de API
+// Chaves
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "AIzaSyC84DLI9J_TLNapOQEGHRjf9U9IlnCLUzA";
 const CNPJA_API_KEY = process.env.CNPJA_API_KEY || "50cd7f37-a8a7-4076-b180-520a12dfdc3c-608f7b7f-2488-44b9-81f5-017cf47d154b";
 
@@ -25,10 +25,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// --- ARMAZENAMENTO DE JOBS EM MEMÓRIA ---
 const jobs = {}; 
 
-// Limpeza de Jobs antigos
 setInterval(() => {
     const now = Date.now();
     for (const id in jobs) {
@@ -40,30 +38,34 @@ setInterval(() => {
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Tenta extrair a UF de uma string de localização
- */
-function extractStateFromLocation(location) {
-    if (!location) return null;
-    const validUFs = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SP","SE","TO"];
-    
-    // Tenta achar UF solta na string (ex: "São Paulo SP")
-    const words = location.toUpperCase().split(/[\s,-]+/);
-    const found = words.find(w => validUFs.includes(w));
-    return found || null;
-}
+// --- MAPAS DE REGIÃO ---
+const REGION_MAP = {
+    'SUDESTE': ['SP', 'RJ', 'MG', 'ES'],
+    'SUL': ['PR', 'RS', 'SC'],
+    'NORDESTE': ['BA', 'PE', 'CE', 'MA', 'PB', 'RN', 'AL', 'SE', 'PI'],
+    'CENTRO_OESTE': ['DF', 'GO', 'MT', 'MS'],
+    'NORTE': ['AM', 'PA', 'AC', 'RR', 'RO', 'AP', 'TO']
+};
 
 /**
- * Formata dados da CNPJa para o padrão do nosso sistema
+ * Remove acentos para comparação de strings
  */
+function normalizeString(str) {
+    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
 function mapCnpjaToSystem(record, nicho) {
     let telefone = null;
     if (record.phones && record.phones.length > 0) {
-        telefone = `(${record.phones[0].area}) ${record.phones[0].number}`;
+        // Pega preferencialmente celular
+        const mobile = record.phones.find(p => p.type === 'MOBILE');
+        const phone = mobile || record.phones[0];
+        telefone = `(${phone.area}) ${phone.number}`;
     }
 
     let email = null;
     if (record.emails && record.emails.length > 0) {
+        // Filtra emails de contadores se possível, mas pega o primeiro disponível
         email = record.emails[0].address;
     }
 
@@ -80,6 +82,11 @@ function mapCnpjaToSystem(record, nicho) {
         try {
             capital = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(record.company.equity);
         } catch (e) {}
+    }
+
+    let cnae = "---";
+    if (record.mainActivity) {
+        cnae = `${record.mainActivity.id} - ${record.mainActivity.text}`;
     }
 
     return {
@@ -103,208 +110,155 @@ function mapCnpjaToSystem(record, nicho) {
             telefone: telefone,
             site: null
         },
-        score_enrichment: 100, // Dados oficiais
+        cnae: cnae,
+        score_enrichment: 100,
         origin: 'cnpja_direct'
     };
 }
 
 /**
- * BUSCA E ENRIQUECIMENTO (GOOGLE + CNPJa)
+ * Verifica se o lead é qualificado (Tem email E telefone)
  */
-async function findAndEnrichWithCnpja(companyName, state) {
-    if (!companyName) return null;
-
-    try {
-        const params = {
-            'names.in': companyName,
-            limit: 1 
-        };
-        if (state) params['address.state.in'] = state;
-
-        const response = await axios.get('https://api.cnpja.com/office', {
-            headers: { 'Authorization': CNPJA_API_KEY },
-            params: params,
-            timeout: 10000 
-        });
-
-        if (response.data && response.data.records && response.data.records.length > 0) {
-            return response.data.records[0];
-        }
-        return null;
-    } catch (error) {
-        return null;
-    }
+function isLeadQualified(lead) {
+    return lead.contato.email && lead.contato.telefone;
 }
 
-/**
- * BUSCA DIRETA NA CNPJa (FALLBACK)
- * Usado quando o Google falha. Pesquisa empresas que tenham o "Nicho" no nome.
- */
-async function searchDirectlyInCnpja(niche, location) {
-    console.log(`[FALLBACK] Buscando diretamente na CNPJa: ${niche} em ${location}`);
-    
-    const uf = extractStateFromLocation(location);
-    const params = {
-        'alias.in': niche, // Tenta achar o nicho no nome fantasia
-        limit: 10
-    };
+async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
+    // Se ufs for string unica, transforma em array
+    const targetUfs = Array.isArray(ufs) ? ufs : [ufs];
+    const allResults = [];
 
-    if (uf) {
-        params['address.state.in'] = uf;
-    }
+    // Limite de segurança para não estourar tempo
+    const MAX_UFS_TO_SEARCH = targetUfs.length > 3 ? 3 : targetUfs.length; 
 
-    try {
-        // Primeira tentativa: Busca por Nome Fantasia contendo o termo
-        const response = await axios.get('https://api.cnpja.com/office', {
-            headers: { 'Authorization': CNPJA_API_KEY },
-            params: params,
-            timeout: 20000
-        });
+    for (let i = 0; i < MAX_UFS_TO_SEARCH; i++) {
+        const uf = targetUfs[i];
+        
+        console.log(`[CNPJa] Buscando ${niche} em ${uf}...`);
 
-        let records = response.data.records || [];
-
-        // Se não achou nada, tenta buscar por Razão Social
-        if (records.length === 0) {
-            delete params['alias.in'];
-            params['company.name.in'] = niche;
-            const response2 = await axios.get('https://api.cnpja.com/office', {
+        const params = {
+            'alias.in': niche,
+            'address.state.in': uf,
+            'status.id.in': 2, // Apenas ATIVA
+            limit: 20 // Pega mais para poder filtrar
+        };
+        
+        // Se temos cidade especifica, tentamos filtrar (a API aceita codigos IBGE, mas por nome filtraremos depois)
+        
+        try {
+            // Tentativa 1: Nome Fantasia
+            let response = await axios.get('https://api.cnpja.com/office', {
                 headers: { 'Authorization': CNPJA_API_KEY },
                 params: params,
-                timeout: 20000
+                timeout: 15000
             });
-            records = response2.data.records || [];
+
+            let records = response.data.records || [];
+
+            // Tentativa 2: Razão Social (se vier pouco)
+            if (records.length < 5) {
+                delete params['alias.in'];
+                params['company.name.in'] = niche;
+                try {
+                    const response2 = await axios.get('https://api.cnpja.com/office', {
+                        headers: { 'Authorization': CNPJA_API_KEY },
+                        params: params,
+                        timeout: 15000
+                    });
+                    const moreRecords = response2.data.records || [];
+                    // Junta sem duplicatas
+                    const existingIds = new Set(records.map(r => r.taxId));
+                    moreRecords.forEach(r => {
+                        if (!existingIds.has(r.taxId)) records.push(r);
+                    });
+                } catch (e) { /* ignore */ }
+            }
+
+            // Processamento e Filtragem Rigorosa
+            const mapped = records.map(r => mapCnpjaToSystem(r, niche));
+            
+            const filtered = mapped.filter(lead => {
+                // 1. Filtro de Qualificação (Email + Telefone)
+                if (!isLeadQualified(lead)) return false;
+
+                // 2. Filtro de Cidade (Se aplicável)
+                if (cityFilter) {
+                    const leadCity = normalizeString(lead.endereco.municipio);
+                    const targetCity = normalizeString(cityFilter);
+                    // Verifica se a cidade do lead contem a cidade alvo ou vice versa (para evitar erros de digitacao leves)
+                    if (!leadCity.includes(targetCity) && !targetCity.includes(leadCity)) return false;
+                }
+
+                return true;
+            });
+
+            allResults.push(...filtered);
+
+        } catch (error) {
+            console.error(`Erro buscando em ${uf}:`, error.message);
         }
-
-        return records.map(r => mapCnpjaToSystem(r, niche));
-
-    } catch (error) {
-        console.error("[FALLBACK ERROR]", error.message);
-        return [];
-    }
-}
-
-async function processGoogleLead(place, niche, location) {
-    const rawName = place.displayName?.text || "Nome Desconhecido";
-    const address = place.formattedAddress || "";
-    // Tenta extrair UF do endereço do Google
-    const state = extractStateFromLocation(address);
-    
-    let companyData = {
-        cnpj: null,
-        razao_social: rawName,
-        nome_fantasia: rawName,
-        nicho: niche,
-        status: place.businessStatus === 'OPERATIONAL' ? 'Ativa' : 'Inativa',
-        data_abertura: "---",
-        capital_social: "---",
-        porte: "---",
-        socios: [],
-        endereco: {
-            logradouro: address,
-            municipio: location,
-            uf: state || "BR",
-            cep: ""
-        },
-        contato: {
-            email: null,
-            telefone: place.nationalPhoneNumber || null,
-            site: place.websiteUri || null
-        },
-        score_enrichment: 30, 
-        origin: 'google_places'
-    };
-
-    try {
-        const officialData = await findAndEnrichWithCnpja(rawName, state);
-        if (officialData) {
-            // Mescla dados oficiais se encontrar
-            const enriched = mapCnpjaToSystem(officialData, niche);
-            // Mantém telefone/site do Google se o oficial não tiver
-            if (!enriched.contato.telefone && companyData.contato.telefone) enriched.contato.telefone = companyData.contato.telefone;
-            if (companyData.contato.site) enriched.contato.site = companyData.contato.site;
-            return enriched;
-        } 
-    } catch (e) {
-        console.error(`Erro processando ${rawName}`, e.message);
+        
+        // Se já achou bastante, para (para não ficar muito lento)
+        if (allResults.length >= 10) break;
     }
 
-    return companyData;
+    return allResults;
 }
 
-// --- ROTAS DA API ---
+
+// --- ROTAS ---
 
 app.get('/api/status', (req, res) => {
-    res.json({ status: 'online', uptime: process.uptime() });
+    res.json({ status: 'online' });
 });
 
 app.post('/api/start-search', async (req, res) => {
-    const { niche, location } = req.body;
+    const { niche, location, region_type, selected_uf, selected_region } = req.body;
     
-    if (!niche || !location) return res.status(400).json({ error: "Faltam parâmetros" });
+    // Tratamento de parâmetros dependendo do tipo de busca
+    let targetUfs = [];
+    let cityFilter = null;
+
+    if (region_type === 'cidade') {
+        targetUfs = [selected_uf || 'SP'];
+        cityFilter = location.split(' ')[0]; // Pega só o nome da cidade da string "Boituva SP"
+        if (cityFilter.endsWith(',')) cityFilter = cityFilter.slice(0, -1);
+    } else if (region_type === 'estado') {
+        targetUfs = [selected_uf];
+    } else if (region_type === 'regiao') {
+        targetUfs = REGION_MAP[selected_region] || ['SP'];
+    }
 
     const jobId = crypto.randomUUID();
     jobs[jobId] = { id: jobId, startTime: Date.now(), status: 'running', results: [], error: null };
 
-    res.json({ jobId, message: "Busca iniciada em background" });
+    res.json({ jobId, message: "Busca iniciada" });
 
     (async () => {
         try {
-            console.log(`[JOB ${jobId}] Iniciando busca Google: ${niche} - ${location}`);
+            console.log(`[JOB ${jobId}] Iniciando. Tipo: ${region_type}. Nicho: ${niche}`);
+
+            // Busca diretamente na CNPJa (Mais confiável para dados enriquecidos)
+            const results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter);
             
-            // TENTATIVA 1: GOOGLE PLACES
-            const googleResponse = await axios.post(
-                'https://places.googleapis.com/v1/places:searchText',
-                { textQuery: `${niche} em ${location}`, pageSize: 10 },
-                {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Goog-Api-Key': GOOGLE_API_KEY,
-                        'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.businessStatus'
-                    },
-                    timeout: 15000
-                }
-            );
-
-            const places = googleResponse.data.places || [];
-
-            if (places.length > 0) {
-                // Processa resultados do Google
-                for (const place of places) {
-                    if (!jobs[jobId]) break;
-                    await wait(300); 
-                    const result = await processGoogleLead(place, niche, location);
-                    jobs[jobId].results.push(result);
-                }
+            if (results.length > 0) {
+                jobs[jobId].results.push(...results);
             } else {
-                throw new Error("Google retornou 0 resultados");
+                jobs[jobId].error = "Nenhum lead qualificado (com email e telefone) encontrado para os filtros selecionados.";
             }
 
         } catch (error) {
-            console.error(`[JOB ${jobId}] Erro no Google (${error.message || error.response?.status}). Ativando Fallback CNPJa...`);
-            
-            // TENTATIVA 2: FALLBACK DIRETO CNPJa (Se Google falhar ou bloquear)
-            try {
-                const directResults = await searchDirectlyInCnpja(niche, location);
-                
-                if (directResults.length > 0) {
-                     if (jobs[jobId]) jobs[jobId].results.push(...directResults);
-                } else {
-                     if (jobs[jobId]) jobs[jobId].error = "Nenhum lead encontrado nas bases oficiais.";
-                }
-
-            } catch (fallbackError) {
-                console.error(`[JOB ${jobId}] Erro no Fallback:`, fallbackError.message);
-                if (jobs[jobId]) jobs[jobId].error = "Falha em todas as fontes de dados.";
-            }
+            console.error(`[JOB ${jobId}] Erro Fatal:`, error);
+            jobs[jobId].error = "Erro interno no servidor ao processar busca.";
         } finally {
-            if (jobs[jobId]) jobs[jobId].status = 'completed';
+            jobs[jobId].status = 'completed';
         }
     })();
 });
 
 app.get('/api/check-search/:id', (req, res) => {
     const job = jobs[req.params.id];
-    if (!job) return res.status(404).json({ error: "Job não encontrado" });
+    if (!job) return res.status(404).json({ error: "Job expirado ou não encontrado" });
     res.json(job);
 });
 
