@@ -56,10 +56,10 @@ function normalizeString(str) {
 /**
  * FUNÇÃO DE REQUISIÇÃO SEGURA COM RETRY (Trata Erro 429)
  */
-async function requestWithRetry(url, config, retries = 3, baseDelay = 2000) {
+async function requestWithRetry(url, config, retries = 3, baseDelay = 4000) {
     for (let i = 0; i < retries; i++) {
         try {
-            // Delay respeitoso antes de qualquer chamada
+            // Delay respeitoso antes de qualquer chamada (Slow & Steady)
             await new Promise(r => setTimeout(r, baseDelay));
             return await axios.get(url, config);
         } catch (error) {
@@ -67,7 +67,8 @@ async function requestWithRetry(url, config, retries = 3, baseDelay = 2000) {
             const isLastAttempt = i === retries - 1;
 
             if (isRateLimit && !isLastAttempt) {
-                const waitTime = (i + 1) * 5000; // 5s, 10s, 15s...
+                // Backoff Agressivo: 15s, 30s...
+                const waitTime = (i + 1) * 15000; 
                 console.log(`[API] Rate Limit (429) detectado. Aguardando ${waitTime/1000}s para tentar novamente...`);
                 await new Promise(r => setTimeout(r, waitTime));
                 continue;
@@ -180,8 +181,12 @@ async function searchGoogleAndEnrich(niche, city, uf) {
         for (const place of places) {
             const companyName = place.displayName.text;
             
+            // Pausa forçada de 4 segundos entre cada item para evitar 429
+            await new Promise(r => setTimeout(r, 4000));
+
             try {
                 // Usa a função helper com retry automático
+                // baseDelay de 0 aqui pois já esperamos no loop acima
                 const cnpjaResponse = await requestWithRetry('https://api.cnpja.com/office', {
                     headers: { 'Authorization': CNPJA_API_KEY },
                     params: {
@@ -192,7 +197,7 @@ async function searchGoogleAndEnrich(niche, city, uf) {
                         limit: 1
                     },
                     timeout: 20000
-                }, 3, 1500); // 3 tentativas, 1.5s de delay base
+                }, 2, 0); // Menos retries aqui para não travar o loop eternamente
 
                 const records = cnpjaResponse.data.records || [];
                 
@@ -253,11 +258,12 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
             
             try {
                 // Usa função helper com retry
+                // Delay maior para listagem massiva (4s)
                 const response = await requestWithRetry('https://api.cnpja.com/office', {
                     headers: { 'Authorization': CNPJA_API_KEY },
                     params: params,
                     timeout: 45000 
-                }, 3, 2000); // Delay maior para listagem massiva (2s)
+                }, 3, 4000); 
 
                 const records = response.data.records || [];
                 nextToken = response.data.next; 
