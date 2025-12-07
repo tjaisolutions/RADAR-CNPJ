@@ -108,6 +108,7 @@ function App() {
 
       if (leadsCount === 0) {
           setError("Nenhum lead qualificado encontrado com os filtros rigorosos (Email + Telefone obrigatórios). Tente expandir a região ou mudar o nicho.");
+          setServerStatus('online'); // Se respondeu com 0, está online
       } else {
         const newHistoryItem: SearchHistoryItem = {
             id: crypto.randomUUID(),
