@@ -53,6 +53,30 @@ function normalizeString(str) {
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 
+/**
+ * FUNÇÃO DE REQUISIÇÃO SEGURA COM RETRY (Trata Erro 429)
+ */
+async function requestWithRetry(url, config, retries = 3, baseDelay = 2000) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            // Delay respeitoso antes de qualquer chamada
+            await new Promise(r => setTimeout(r, baseDelay));
+            return await axios.get(url, config);
+        } catch (error) {
+            const isRateLimit = error.response && error.response.status === 429;
+            const isLastAttempt = i === retries - 1;
+
+            if (isRateLimit && !isLastAttempt) {
+                const waitTime = (i + 1) * 5000; // 5s, 10s, 15s...
+                console.log(`[API] Rate Limit (429) detectado. Aguardando ${waitTime/1000}s para tentar novamente...`);
+                await new Promise(r => setTimeout(r, waitTime));
+                continue;
+            }
+            throw error;
+        }
+    }
+}
+
 function mapCnpjaToSystem(record, nicho, origin = 'cnpja_direct') {
     let telefone = null;
     if (record.phones && record.phones.length > 0) {
@@ -152,25 +176,23 @@ async function searchGoogleAndEnrich(niche, city, uf) {
 
         if (places.length === 0) return null; // Retorna null para ativar fallback
 
-        // 2. Enriquecimento via CNPJa (Com Rate Limit para evitar 429)
+        // 2. Enriquecimento via CNPJa (Com Rate Limit Controlado)
         for (const place of places) {
             const companyName = place.displayName.text;
             
             try {
-                // Delay de 300ms entre chamadas para não estourar rate limit
-                await new Promise(r => setTimeout(r, 300));
-
-                const cnpjaResponse = await axios.get('https://api.cnpja.com/office', {
+                // Usa a função helper com retry automático
+                const cnpjaResponse = await requestWithRetry('https://api.cnpja.com/office', {
                     headers: { 'Authorization': CNPJA_API_KEY },
                     params: {
-                        'names.in': companyName, // Busca exata pelo nome do Google
-                        'address.state.in': uf,  // Filtra pelo estado correto
-                        'emails.ex': true,       // Obriga Email
-                        'phones.ex': true,       // Obriga Telefone
-                        limit: 1 // Queremos apenas o match exato
+                        'names.in': companyName,
+                        'address.state.in': uf,
+                        'emails.ex': true,
+                        'phones.ex': true,
+                        limit: 1
                     },
-                    timeout: 15000
-                });
+                    timeout: 20000
+                }, 3, 1500); // 3 tentativas, 1.5s de delay base
 
                 const records = cnpjaResponse.data.records || [];
                 
@@ -182,12 +204,8 @@ async function searchGoogleAndEnrich(niche, city, uf) {
                 }
 
             } catch (enrichErr) {
-                // Se der erro 429 (Too Many Requests), espera um pouco mais
-                if (enrichErr.response && enrichErr.response.status === 429) {
-                    console.log(`[SNIPER] Rate limit atingido. Aguardando...`);
-                    await new Promise(r => setTimeout(r, 2000));
-                }
-                // Ignora falhas individuais de enriquecimento
+                console.error(`[SNIPER] Falha ao enriquecer "${companyName}": ${enrichErr.message}`);
+                // Continua para o próximo mesmo com erro
             }
         }
 
@@ -208,7 +226,7 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
     
     // Limite de segurança
     const MAX_UFS_TO_SEARCH = targetUfs.length > 3 ? 3 : targetUfs.length; 
-    const MAX_PAGES_PER_UF = cityFilter ? 10 : 2; 
+    const MAX_PAGES_PER_UF = cityFilter ? 5 : 2; // Menos páginas se for estado, mais se for cidade
 
     for (let i = 0; i < MAX_UFS_TO_SEARCH; i++) {
         const uf = targetUfs[i];
@@ -234,11 +252,12 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
             }
             
             try {
-                const response = await axios.get('https://api.cnpja.com/office', {
+                // Usa função helper com retry
+                const response = await requestWithRetry('https://api.cnpja.com/office', {
                     headers: { 'Authorization': CNPJA_API_KEY },
                     params: params,
                     timeout: 45000 
-                });
+                }, 3, 2000); // Delay maior para listagem massiva (2s)
 
                 const records = response.data.records || [];
                 nextToken = response.data.next; 
@@ -261,14 +280,13 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null) {
                 
                 console.log(`[CNPJa] ${uf} Página ${pageCount}: Encontrados ${filtered.length} leads qualificados.`);
 
+                // Se achamos bastante, paramos para não gastar créditos/tempo à toa
                 if (foundInUf >= 50) break;
 
             } catch (error) {
                 console.error(`Erro buscando em ${uf} na página ${pageCount}:`, error.message);
                 break; 
             }
-
-            await new Promise(r => setTimeout(r, 500)); // Delay aumentado para evitar 429
 
         } while (nextToken && pageCount < MAX_PAGES_PER_UF);
         
@@ -326,6 +344,10 @@ app.post('/api/start-search', async (req, res) => {
             // 2. FALLBACK PARA DEEP SCAN (CNPJa DIRETO)
             // Se o Google falhou (null) ou retornou vazio, ou se é busca por Estado/Região
             if (!results || results.length === 0) {
+                // Só ativa Deep Scan se o Sniper falhou totalmente (erro) ou se não achou nada
+                // Se o sniper rodou e achou 0, as vezes é melhor confiar nele do que gastar API.
+                // Mas aqui vamos garantir resultados.
+                
                 if (region_type === 'cidade') console.log(`[JOB ${jobId}] Sniper falhou ou sem resultados. Ativando Deep Scan (CNPJa Direto)...`);
                 results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter);
             }
