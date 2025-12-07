@@ -76,7 +76,7 @@ function App() {
     else if (searchScope === 'estado') locationString = selectedState;
     else locationString = selectedRegion;
 
-    setLoadingMsg(`Conectando ao servidor e buscando ${niche}... (Isso pode levar alguns segundos se o servidor estiver acordando)`);
+    setLoadingMsg(`Iniciando busca inteligente (Google + CNPJa) para ${niche}...`);
     
     let leadsCount = 0;
     const tempResults: EnrichedCompany[] = [];
@@ -91,7 +91,7 @@ function App() {
       };
       
       await prospectLeads(query, (newLead) => {
-          setLoadingMsg('Processando leads...');
+          setLoadingMsg('Localizando e enriquecendo leads...');
           // Filtra duplicatas na UI
           setCurrentResults(prev => {
               if (prev.some(p => p.cnpj === newLead.cnpj)) return prev;
