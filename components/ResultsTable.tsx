@@ -1,41 +1,92 @@
 import React from 'react';
 import { EnrichedCompany } from '../types';
-import { Download, Building2, Phone, Mail, MapPin, Users, DollarSign, CheckCircle2, AlertCircle, SearchX, ShieldCheck, Filter } from 'lucide-react';
+import { Download, Building2, Phone, Mail, MapPin, Users, DollarSign, CheckCircle2, Filter, FileSpreadsheet, FileText } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface ResultsTableProps {
   data: EnrichedCompany[];
 }
 
 const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
-  const handleExport = () => {
+  
+  // Função para exportar Excel Bonito (.xlsx)
+  const handleExportExcel = () => {
     if (data.length === 0) return;
 
-    const headers = ["CNPJ", "Razão Social", "Fantasia", "Nicho", "Email", "Telefone", "Cidade", "UF", "Capital Social", "CNAE", "Sócios"];
-    const csvContent = [
-      headers.join(","),
-      ...data.map(c => [
-        `"${c.cnpj || 'Não encontrado'}"`,
-        `"${c.razao_social}"`,
-        `"${c.nome_fantasia}"`,
-        `"${c.nicho}"`,
-        `"${c.contato.email || ''}"`,
-        `"${c.contato.telefone || ''}"`,
-        `"${c.endereco.municipio}"`,
-        `"${c.endereco.uf}"`,
-        `"${c.capital_social}"`,
-        `"${c.cnae || ''}"`,
-        `"${c.socios.map(s => s.nome).join('; ')}"`
-      ].join(","))
-    ].join("\n");
+    // 1. Preparar os dados de forma limpa
+    const formattedData = data.map(item => ({
+        "Status": item.status,
+        "CNPJ": item.cnpj || "N/A",
+        "Razão Social": item.razao_social,
+        "Nome Fantasia": item.nome_fantasia,
+        "Nicho": item.nicho,
+        "Telefone": item.contato.telefone || "N/A",
+        "Email": item.contato.email || "N/A",
+        "Cidade": item.endereco.municipio,
+        "UF": item.endereco.uf,
+        "Endereço Completo": `${item.endereco.logradouro}, ${item.endereco.numero} - ${item.endereco.bairro}`,
+        "Capital Social": item.capital_social,
+        "Porte": item.porte,
+        "CNAE": item.cnae,
+        "Sócios": item.socios.map(s => s.nome).join('; ')
+    }));
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `leads_qualificados_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // 2. Criar Workbook e Worksheet
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(formattedData);
+
+    // 3. Ajustar largura das colunas (Auto-width)
+    const wscols = Object.keys(formattedData[0]).map(key => {
+        return { wch: Math.max(key.length, 20) }; // Largura mínima de 20 caracteres
+    });
+    ws['!cols'] = wscols;
+
+    // 4. Salvar arquivo
+    XLSX.utils.book_append_sheet(wb, ws, "Leads");
+    XLSX.writeFile(wb, `Leads_Enriched_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  // Função para exportar PDF Profissional
+  const handleExportPDF = () => {
+    if (data.length === 0) return;
+
+    const doc = new jsPDF({ orientation: 'landscape' });
+
+    // Título
+    doc.setFontSize(18);
+    doc.text("Relatório de Prospecção - Lead Enriched Pro", 14, 20);
+    doc.setFontSize(10);
+    doc.text(`Gerado em: ${new Date().toLocaleDateString('pt-BR')} | Total de Leads: ${data.length}`, 14, 28);
+
+    // Configuração da Tabela
+    const tableColumn = ["Empresa / Fantasia", "CNPJ", "Telefone", "Email", "Cidade/UF", "Sócios"];
+    const tableRows = [];
+
+    data.forEach(item => {
+        const companyData = [
+            item.nome_fantasia || item.razao_social,
+            item.cnpj || "---",
+            item.contato.telefone || "---",
+            item.contato.email || "---",
+            `${item.endereco.municipio}/${item.endereco.uf}`,
+            item.socios.length > 0 ? item.socios[0].nome + (item.socios.length > 1 ? ` (+${item.socios.length - 1})` : "") : "---"
+        ];
+        tableRows.push(companyData);
+    });
+
+    autoTable(doc, {
+        head: [tableColumn],
+        body: tableRows,
+        startY: 35,
+        theme: 'grid',
+        styles: { fontSize: 8, cellPadding: 2 },
+        headStyles: { fillColor: [79, 70, 229] }, // Cor Indigo do seu app
+        alternateRowStyles: { fillColor: [245, 247, 255] }
+    });
+
+    doc.save(`Relatorio_Leads_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   if (data.length === 0) {
@@ -52,7 +103,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-full animate-in fade-in duration-500">
-      <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+      <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-50 gap-4">
         <div>
            <h3 className="font-bold text-slate-800 flex items-center gap-2">
              Resultados da Prospecção
@@ -66,13 +117,25 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
            </p>
         </div>
         
-        <button
-          onClick={handleExport}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-        >
-          <Download className="w-4 h-4" />
-          Exportar CSV
-        </button>
+        <div className="flex items-center gap-2">
+            <button
+            onClick={handleExportExcel}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+            title="Baixar Planilha Excel"
+            >
+            <FileSpreadsheet className="w-4 h-4" />
+            Excel
+            </button>
+            
+            <button
+            onClick={handleExportPDF}
+            className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+            title="Baixar Relatório PDF"
+            >
+            <FileText className="w-4 h-4" />
+            PDF
+            </button>
+        </div>
       </div>
 
       <div className="overflow-auto flex-1">
@@ -88,8 +151,6 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {data.map((company, index) => {
-                const hasFullData = company.contato.email && company.contato.telefone;
-
                 return (
                   <tr key={index} className="hover:bg-slate-50 transition-colors group">
                     <td className="p-4 w-12 text-center">
