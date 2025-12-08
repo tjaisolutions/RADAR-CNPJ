@@ -3,7 +3,7 @@ import { EnrichedCompany, SearchHistoryItem, SearchQuery } from './types';
 import { prospectLeads, checkApiStatus } from './services/api';
 import ResultsTable from './components/ResultsTable';
 import HistorySidebar from './components/HistorySidebar';
-import { Menu, Layers, Loader2, Search, MapPin, Briefcase, Zap, AlertTriangle, Building, Map, Globe, Wifi, WifiOff } from 'lucide-react';
+import { Menu, Layers, Loader2, Search, MapPin, Briefcase, AlertTriangle, Building, Map, Globe, ChevronDown } from 'lucide-react';
 
 const REGIONS = [
     { label: 'Sudeste (SP, RJ, MG, ES)', value: 'SUDESTE' },
@@ -26,14 +26,10 @@ function App() {
 
   const [currentResults, setCurrentResults] = useState<EnrichedCompany[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingMsg, setLoadingMsg] = useState('');
   const [history, setHistory] = useState<SearchHistoryItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
-  // Status do Servidor
-  const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
-
   useEffect(() => {
     // Carrega histórico
     const savedHistory = localStorage.getItem('lead_search_history');
@@ -45,13 +41,8 @@ function App() {
       }
     }
 
-    // WAKE UP: Tenta acordar o servidor assim que a página carrega
-    const wakeUpServer = async () => {
-        setServerStatus('checking');
-        const status = await checkApiStatus();
-        setServerStatus(status.status === 'online' ? 'online' : 'offline');
-    };
-    wakeUpServer();
+    // WAKE UP: Tenta acordar o servidor assim que a página carrega (silenciosamente)
+    checkApiStatus().catch(() => console.log("Servidor acordando..."));
 
   }, []);
 
@@ -75,8 +66,6 @@ function App() {
     if (searchScope === 'cidade') locationString = `${city} ${selectedState}`;
     else if (searchScope === 'estado') locationString = selectedState;
     else locationString = selectedRegion;
-
-    setLoadingMsg(`Iniciando busca inteligente (Google + CNPJa) para ${niche}...`);
     
     let leadsCount = 0;
     const tempResults: EnrichedCompany[] = [];
@@ -91,7 +80,6 @@ function App() {
       };
       
       await prospectLeads(query, (newLead) => {
-          setLoadingMsg('Localizando e enriquecendo leads...');
           // Filtra duplicatas na UI
           setCurrentResults(prev => {
               if (prev.some(p => p.cnpj === newLead.cnpj)) return prev;
@@ -102,13 +90,11 @@ function App() {
           if (!tempResults.some(p => p.cnpj === newLead.cnpj)) {
               tempResults.push(newLead);
               leadsCount++;
-              setLoadingMsg(`Encontrados: ${leadsCount} leads qualificados (Com Email/Telefone)`);
           }
       });
 
       if (leadsCount === 0) {
           setError("Nenhum lead qualificado encontrado com os filtros rigorosos (Email + Telefone obrigatórios). Tente expandir a região ou mudar o nicho.");
-          setServerStatus('online'); // Se respondeu com 0, está online
       } else {
         const newHistoryItem: SearchHistoryItem = {
             id: crypto.randomUUID(),
@@ -118,19 +104,15 @@ function App() {
             results: tempResults
         };
         setHistory(prev => [newHistoryItem, ...prev]);
-        setServerStatus('online');
       }
 
     } catch (err: any) {
       console.error("App Error:", err);
-      // Se deu erro, provavelmente caiu a conexão ou servidor deu timeout
-      setServerStatus('offline');
       if (leadsCount === 0) {
         setError(err.message || "O servidor demorou para responder. Tente novamente.");
       }
     } finally {
       setLoading(false);
-      setLoadingMsg('');
     }
   };
 
@@ -183,28 +165,6 @@ function App() {
               <Layers className="w-6 h-6" />
               <h1 className="text-xl font-bold tracking-tight">Lead Enriched <span className="text-indigo-400 font-light">Pro</span></h1>
             </div>
-          </div>
-          
-          {/* Status do Servidor no Header (Mobile/Desktop) */}
-          <div className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200">
-            {serverStatus === 'checking' && (
-                <>
-                    <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
-                    <span className="text-amber-600">Conectando Servidor...</span>
-                </>
-            )}
-            {serverStatus === 'online' && (
-                <>
-                    <Wifi className="w-3 h-3 text-green-500" />
-                    <span className="text-green-600">Servidor Online</span>
-                </>
-            )}
-            {serverStatus === 'offline' && (
-                <>
-                    <WifiOff className="w-3 h-3 text-red-500" />
-                    <span className="text-red-600">Servidor Off (Acordando...)</span>
-                </>
-            )}
           </div>
         </header>
 
@@ -286,13 +246,16 @@ function App() {
                             </div>
                             <div className="md:col-span-3">
                                 <label className="block text-sm font-medium text-slate-700 mb-1">UF</label>
-                                <select 
-                                    value={selectedState}
-                                    onChange={(e) => setSelectedState(e.target.value)}
-                                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                                >
-                                    {STATES.map(uf => <option key={uf} value={uf}>{uf}</option>)}
-                                </select>
+                                <div className="relative">
+                                    <select 
+                                        value={selectedState}
+                                        onChange={(e) => setSelectedState(e.target.value)}
+                                        className="w-full pl-4 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer hover:bg-slate-100 transition-colors text-slate-700 font-medium"
+                                    >
+                                        {STATES.map(uf => <option key={uf} value={uf}>{uf}</option>)}
+                                    </select>
+                                    <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-slate-500 pointer-events-none" />
+                                </div>
                             </div>
                         </>
                     )}
@@ -300,26 +263,32 @@ function App() {
                     {searchScope === 'estado' && (
                         <div className="md:col-span-8">
                              <label className="block text-sm font-medium text-slate-700 mb-1">Estado Alvo</label>
-                             <select 
-                                value={selectedState}
-                                onChange={(e) => setSelectedState(e.target.value)}
-                                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                            >
-                                {STATES.map(uf => <option key={uf} value={uf}>{uf}</option>)}
-                            </select>
+                             <div className="relative">
+                                 <select 
+                                    value={selectedState}
+                                    onChange={(e) => setSelectedState(e.target.value)}
+                                    className="w-full pl-4 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer hover:bg-slate-100 transition-colors text-slate-700 font-medium"
+                                >
+                                    {STATES.map(uf => <option key={uf} value={uf}>{uf}</option>)}
+                                </select>
+                                <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-slate-500 pointer-events-none" />
+                             </div>
                         </div>
                     )}
 
                     {searchScope === 'regiao' && (
                         <div className="md:col-span-8">
                              <label className="block text-sm font-medium text-slate-700 mb-1">Região Alvo</label>
-                             <select 
-                                value={selectedRegion}
-                                onChange={(e) => setSelectedRegion(e.target.value)}
-                                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                            >
-                                {REGIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-                            </select>
+                             <div className="relative">
+                                 <select 
+                                    value={selectedRegion}
+                                    onChange={(e) => setSelectedRegion(e.target.value)}
+                                    className="w-full pl-4 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer hover:bg-slate-100 transition-colors text-slate-700 font-medium"
+                                >
+                                    {REGIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                                </select>
+                                <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-slate-500 pointer-events-none" />
+                             </div>
                         </div>
                     )}
                   </div>
@@ -333,13 +302,6 @@ function App() {
                     Prospectar Leads Qualificados
                   </button>
                 </form>
-
-                {loading && (
-                  <div className="mt-4 flex items-center justify-center gap-2 text-sm text-indigo-600 font-medium animate-pulse bg-indigo-50 py-2 rounded-lg border border-indigo-100">
-                     <Zap className="w-4 h-4 fill-indigo-600" />
-                     {loadingMsg}
-                  </div>
-                )}
              </div>
           </div>
             
