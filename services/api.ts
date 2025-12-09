@@ -1,4 +1,4 @@
-import { EnrichedCompany, SearchQuery } from '../types';
+import { EnrichedCompany, SearchQuery, SearchHistoryItem, User } from '../types';
 
 const getBackendUrl = () => {
   if (!window.location.hostname.includes('localhost')) {
@@ -11,53 +11,108 @@ const BACKEND_URL = getBackendUrl();
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Função de Fetch com Retry Agressivo (Persistência)
- * Projetada especificamente para o Render Free Tier.
- * Tenta reconectar por até 60 segundos se houver erro de rede.
- */
 const fetchWithRetry = async (url: string, options: RequestInit = {}, retries = 30, backoff = 2000) => {
   for (let i = 0; i < retries; i++) {
     try {
       const res = await fetch(url, options);
-      
-      // Se a resposta for ok, retorna
       if (res.ok) return res;
-
-      // Se for erro 500/502/503/504 (Erros de servidor/Gateway), tenta de novo
       if (res.status >= 500) {
         console.log(`[API] Aguardando servidor (${res.status})... Tentativa ${i + 1}/${retries}`);
       } else {
-        // Se for 400/404, é erro de lógica, não de conexão. Retorna para tratar.
         return res; 
       }
     } catch (err: any) {
-      // Pega erros de rede (Network Error, Failed to fetch, Load failed)
-      // Apenas loga aviso nas últimas tentativas para não assustar no console
       if (i > 5) {
           console.warn(`[API] Reconectando... (${err.message}). Tentativa ${i + 1}/${retries}`);
       }
     }
-
-    // Se chegou aqui, é porque deu erro. Espera e tenta de novo.
-    if (i < retries - 1) {
-        await wait(backoff);
-    }
+    if (i < retries - 1) await wait(backoff);
   }
   throw new Error("O servidor demorou muito para responder. Por favor, atualize a página e tente novamente.");
 };
 
 export const checkApiStatus = async () => {
   try {
-    // Tenta acordar o servidor com persistência
-    const res = await fetchWithRetry(`${BACKEND_URL}/api/status`, {}, 10, 1000); // 10 tentativas rápidas
+    const res = await fetchWithRetry(`${BACKEND_URL}/api/status`, {}, 10, 1000);
     return await res.json();
   } catch (e) {
     return { status: 'offline' };
   }
 };
 
-// Função baseada em Polling para evitar Timeout
+// --- AUTH & DATA ---
+
+export const loginUser = async (username, password) => {
+    const res = await fetchWithRetry(`${BACKEND_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ username, password })
+    }, 3, 1000);
+    return await res.json();
+};
+
+export const syncUserData = async (userId: string) => {
+    const res = await fetchWithRetry(`${BACKEND_URL}/api/data/sync/${userId}`, {}, 3, 1000);
+    return await res.json();
+};
+
+export const saveHistoryItem = async (userId: string, item: SearchHistoryItem) => {
+    const res = await fetch(`${BACKEND_URL}/api/data/history`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ userId, item })
+    });
+    return await res.json();
+};
+
+export const deleteHistoryItemApi = async (userId: string, itemId: string) => {
+    await fetch(`${BACKEND_URL}/api/data/history/${userId}/${itemId}`, { method: 'DELETE' });
+};
+
+export const clearHistoryApi = async (userId: string) => {
+    await fetch(`${BACKEND_URL}/api/data/history/clear/${userId}`, { method: 'DELETE' });
+};
+
+export const saveLeadApi = async (userId: string, lead: EnrichedCompany) => {
+    await fetch(`${BACKEND_URL}/api/data/leads`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ userId, lead })
+    });
+};
+
+export const deleteLeadApi = async (userId: string, cnpj: string) => {
+    await fetch(`${BACKEND_URL}/api/data/leads/${userId}/${cnpj}`, { method: 'DELETE' });
+};
+
+export const getUsersApi = async () => {
+    const res = await fetch(`${BACKEND_URL}/api/users`);
+    return await res.json();
+}
+
+export const createUserApi = async (user: User) => {
+    await fetch(`${BACKEND_URL}/api/users`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(user)
+    });
+}
+
+export const updateUserApi = async (user: User) => {
+    await fetch(`${BACKEND_URL}/api/users/${user.id}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(user)
+    });
+}
+
+export const deleteUserApi = async (id: string) => {
+    await fetch(`${BACKEND_URL}/api/users/${id}`, { method: 'DELETE' });
+}
+
+
+// --- SEARCH ---
+
 export const prospectLeads = async (
     query: SearchQuery, 
     onLeadFound: (lead: EnrichedCompany) => void
@@ -66,12 +121,11 @@ export const prospectLeads = async (
   console.log(`[API] Iniciando Job em: ${BACKEND_URL || '/api'}`);
   
   try {
-    // 1. Inicia o Job (Com Retry alto para acordar o servidor se necessário)
     const startRes = await fetchWithRetry(`${BACKEND_URL}/api/start-search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(query)
-    }, 30, 2000); // 30 tentativas x 2s = 60s de tolerância para Cold Start
+    }, 30, 2000); 
 
     if (!startRes.ok) {
         const err = await startRes.json();
@@ -79,37 +133,25 @@ export const prospectLeads = async (
     }
     
     const { jobId } = await startRes.json();
-    console.log(`[API] Job iniciado: ${jobId}`);
-
-    // 2. Loop de Polling (Verificação)
     let processedCount = 0;
     let isFinished = false;
     let attempts = 0;
     let emptyResponses = 0;
 
-    // Aumentei o timeout de segurança para garantir que dê tempo da CNPJa responder
     while (!isFinished && attempts < 200) { 
-        await wait(2000); // Espera 2 segundos entre verificações
+        await wait(2000); 
         attempts++;
 
         try {
-            // Polling usa fetch normal, pois se falhar uma vez, tenta na próxima iteração do loop
             const checkRes = await fetch(`${BACKEND_URL}/api/check-search/${jobId}`);
-            
             if (!checkRes.ok) {
                 if (checkRes.status === 404) throw new Error("O processo foi interrompido pelo servidor.");
-                // Falha temporária no polling ignora e continua
                 continue;
             }
-
             const data = await checkRes.json();
-
             if (data.error) throw new Error(data.error);
 
-            // Verifica novos resultados
             const currentResults = data.results || [];
-            
-            // Se tem mais resultados do que tínhamos antes, envia os novos
             if (currentResults.length > processedCount) {
                 const newLeads = currentResults.slice(processedCount);
                 newLeads.forEach((lead: EnrichedCompany) => onLeadFound(lead));
@@ -123,11 +165,9 @@ export const prospectLeads = async (
                 isFinished = true;
             }
         } catch (pollError) {
-            // Silencia erros de polling temporários
             if (attempts % 10 === 0 && emptyResponses > 30) isFinished = true; 
         }
     }
-
   } catch (error: any) {
     console.error("[API] Erro no processo:", error);
     throw error;
