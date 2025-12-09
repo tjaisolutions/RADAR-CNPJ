@@ -5,7 +5,7 @@ import ResultsTable from './components/ResultsTable';
 import HistorySidebar from './components/HistorySidebar';
 import LoginScreen from './components/LoginScreen';
 import SettingsModal from './components/SettingsModal';
-import { Menu, Layers, Loader2, Search, MapPin, Briefcase, AlertTriangle, Building, Map, Globe, ChevronDown, Save, LogOut, Settings, User as UserIcon } from 'lucide-react';
+import { Menu, Layers, Loader2, Search, MapPin, Briefcase, AlertTriangle, Building, Map, Globe, ChevronDown, Save, LogOut, Settings, User as UserIcon, Battery, BatteryCharging } from 'lucide-react';
 
 const REGIONS = [
     { label: 'Sudeste (SP, RJ, MG, ES)', value: 'SUDESTE' },
@@ -19,6 +19,9 @@ const STATES = [
     "AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SP","SE","TO"
 ];
 
+// Limite máximo fixo por dia
+const DAILY_LEAD_LIMIT = 20;
+
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -28,10 +31,14 @@ function App() {
   const [selectedState, setSelectedState] = useState('SP');
   const [selectedRegion, setSelectedRegion] = useState('SUDESTE');
   const [searchScope, setSearchScope] = useState<'cidade' | 'estado' | 'regiao'>('cidade');
+  
+  // Controle de Quantidade e Limites
+  const [leadsRequested, setLeadsRequested] = useState<number>(5);
+  const [dailyCount, setDailyCount] = useState<number>(0);
 
   const [currentResults, setCurrentResults] = useState<EnrichedCompany[]>([]);
-  const [savedLeads, setSavedLeads] = useState<EnrichedCompany[]>([]); // Lista de Leads Salvos (CRM)
-  const [viewMode, setViewMode] = useState<'search' | 'saved'>('search'); // Controla o que está sendo exibido
+  const [savedLeads, setSavedLeads] = useState<EnrichedCompany[]>([]);
+  const [viewMode, setViewMode] = useState<'search' | 'saved'>('search');
 
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<SearchHistoryItem[]>([]);
@@ -72,7 +79,22 @@ function App() {
         }
     }
 
-    // WAKE UP: Tenta acordar o servidor assim que a página carrega (silenciosamente)
+    // --- LÓGICA DO LIMITE DIÁRIO ---
+    const todayStr = new Date().toDateString(); // Ex: "Mon Dec 07 2025"
+    const lastFetchDate = localStorage.getItem('lead_last_fetch_date');
+    const storedDailyCount = localStorage.getItem('lead_daily_count');
+
+    if (lastFetchDate !== todayStr) {
+        // Virou o dia, reseta
+        setDailyCount(0);
+        localStorage.setItem('lead_last_fetch_date', todayStr);
+        localStorage.setItem('lead_daily_count', '0');
+    } else {
+        // Mesmo dia, carrega o contador
+        if (storedDailyCount) setDailyCount(parseInt(storedDailyCount));
+    }
+
+    // WAKE UP
     checkApiStatus().catch(() => console.log("Servidor acordando..."));
 
   }, []);
@@ -81,10 +103,14 @@ function App() {
     localStorage.setItem('lead_search_history', JSON.stringify(history));
   }, [history]);
 
-  // Persiste Leads Salvos sempre que mudar
   useEffect(() => {
     localStorage.setItem('lead_saved_companies', JSON.stringify(savedLeads));
   }, [savedLeads]);
+
+  useEffect(() => {
+      // Atualiza o localStorage sempre que o contador diário mudar
+      localStorage.setItem('lead_daily_count', dailyCount.toString());
+  }, [dailyCount]);
 
   const handleLogin = (user: User) => {
     setIsAuthenticated(true);
@@ -98,28 +124,16 @@ function App() {
     setCurrentUser(null);
     localStorage.removeItem('lead_app_auth');
     localStorage.removeItem('lead_app_current_user');
-    // Limpa dados sensíveis da memória ao sair, se desejar
     setCurrentResults([]);
     setViewMode('search');
   };
 
-  /**
-   * Função para Salvar um Lead
-   * Move da lista de resultados para a lista de salvos
-   */
   const handleSaveLead = (lead: EnrichedCompany) => {
-      // Verifica se já existe (por CNPJ)
       if (savedLeads.some(s => s.cnpj === lead.cnpj)) return;
-
       setSavedLeads(prev => [lead, ...prev]);
-      
-      // Opcional: Remover da lista de resultados atual para dar sensação de "movido"
       setCurrentResults(prev => prev.filter(p => p.cnpj !== lead.cnpj));
   };
 
-  /**
-   * Função para Remover um Lead Salvo
-   */
   const handleRemoveSavedLead = (cnpj: string) => {
       if (confirm("Tem certeza que deseja remover este lead da sua lista salva?")) {
           setSavedLeads(prev => prev.filter(l => l.cnpj !== cnpj));
@@ -129,22 +143,32 @@ function App() {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Validação básica
+    // --- VALIDAÇÃO DE LIMITE DIÁRIO ---
+    const remainingLimit = DAILY_LEAD_LIMIT - dailyCount;
+    if (remainingLimit <= 0) {
+        setError("Limite diário de 20 leads atingido. Volte amanhã para mais buscas.");
+        return;
+    }
+    
+    if (leadsRequested > remainingLimit) {
+        setError(`Você só pode buscar mais ${remainingLimit} leads hoje.`);
+        return;
+    }
+
     if (!niche) return;
     if (searchScope === 'cidade' && !city) return;
 
     setLoading(true);
     setError(null);
     setCurrentResults([]); 
-    setViewMode('search'); // Força a visualização para resultados
+    setViewMode('search');
     
-    // Monta a location string baseada no escopo
     let locationString = '';
     if (searchScope === 'cidade') locationString = `${city} ${selectedState}`;
     else if (searchScope === 'estado') locationString = selectedState;
     else locationString = selectedRegion;
     
-    let leadsCount = 0;
+    let leadsFoundCount = 0;
     const tempResults: EnrichedCompany[] = [];
 
     try {
@@ -153,47 +177,47 @@ function App() {
           location: locationString, 
           region_type: searchScope,
           selected_uf: selectedState,
-          selected_region: selectedRegion
+          selected_region: selectedRegion,
+          limit: leadsRequested // Passa a quantidade desejada para o backend
       };
       
       await prospectLeads(query, (newLead) => {
-          // --- FILTRO DE DUPLICIDADE GLOBAL ---
-          // Se o lead JÁ estiver na lista de SALVOS, nós ignoramos ele.
-          // Isso garante que leads trabalhados não apareçam de novo.
           const isAlreadySaved = savedLeads.some(saved => saved.cnpj === newLead.cnpj);
-          if (isAlreadySaved) {
-              return; 
-          }
+          if (isAlreadySaved) return; 
 
-          // Filtra duplicatas na UI atual
+          // Se atingiu o limite solicitado durante o stream, paramos de aceitar (frontend safety)
+          if (leadsFoundCount >= leadsRequested) return;
+
           setCurrentResults(prev => {
               if (prev.some(p => p.cnpj === newLead.cnpj)) return prev;
               return [...prev, newLead];
           });
           
-          // Adiciona ao array temporário para salvar no histórico
           if (!tempResults.some(p => p.cnpj === newLead.cnpj)) {
               tempResults.push(newLead);
-              leadsCount++;
+              leadsFoundCount++;
           }
       });
 
-      if (leadsCount === 0) {
-          setError("Nenhum NOVO lead encontrado. (Leads já salvos são ocultados automaticamente).");
-      } else {
-        const newHistoryItem: SearchHistoryItem = {
+      // Atualiza o contador diário com o que realmente foi encontrado
+      if (leadsFoundCount > 0) {
+          setDailyCount(prev => prev + leadsFoundCount);
+          
+          const newHistoryItem: SearchHistoryItem = {
             id: crypto.randomUUID(),
             query: query,
             timestamp: Date.now(),
-            resultCount: leadsCount,
+            resultCount: leadsFoundCount,
             results: tempResults
-        };
-        setHistory(prev => [newHistoryItem, ...prev]);
+          };
+          setHistory(prev => [newHistoryItem, ...prev]);
+      } else {
+          setError("Nenhum NOVO lead encontrado. (Leads já salvos são ocultados automaticamente).");
       }
 
     } catch (err: any) {
       console.error("App Error:", err);
-      if (leadsCount === 0) {
+      if (leadsFoundCount === 0) {
         setError(err.message || "O servidor demorou para responder. Tente novamente.");
       }
     } finally {
@@ -215,7 +239,6 @@ function App() {
     }
     setSearchScope(item.query.region_type);
     
-    // Ao carregar do histórico, também filtramos o que já foi salvo
     const filteredResults = item.results.filter(
         r => !savedLeads.some(s => s.cnpj === r.cnpj)
     );
@@ -242,10 +265,11 @@ function App() {
     }
   };
 
-  // --- RENDERIZAÇÃO CONDICIONAL (LOGIN OU APP) ---
   if (!isAuthenticated) {
     return <LoginScreen onLogin={handleLogin} />;
   }
+
+  const remainingDaily = DAILY_LEAD_LIMIT - dailyCount;
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-100 font-sans">
@@ -282,6 +306,14 @@ function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Medidor de Limite Diário */}
+            <div className="hidden md:flex items-center gap-2 mr-4 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200" title={`Limite diário: ${dailyCount}/${DAILY_LEAD_LIMIT}`}>
+                <div className={`flex items-center gap-1.5 text-xs font-bold ${remainingDaily === 0 ? 'text-red-500' : 'text-green-600'}`}>
+                    {remainingDaily > 0 ? <BatteryCharging className="w-4 h-4" /> : <Battery className="w-4 h-4" />}
+                    <span>{remainingDaily} restantes hoje</span>
+                </div>
+            </div>
+
             <div className="hidden sm:flex items-center gap-2 mr-4 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200">
                 <div className="w-6 h-6 bg-indigo-100 text-indigo-700 rounded-full flex items-center justify-center text-xs font-bold">
                     {currentUser?.username.substring(0,2).toUpperCase()}
@@ -310,51 +342,64 @@ function App() {
         <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full scroll-smooth">
           
           {viewMode === 'search' ? (
-            // --- VIEW DE BUSCA ---
             <>
                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8 relative overflow-hidden">
-                    {/* Background decoration */}
                     <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-indigo-50 rounded-full blur-xl"></div>
                     <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-32 h-32 bg-blue-50 rounded-full blur-xl"></div>
 
                     <div className="relative z-10">
                         <div className="mb-6">
-                        <h2 className="text-2xl font-bold text-slate-800">Nova Prospecção</h2>
-                        <p className="text-slate-500 text-sm">Filtros rigorosos aplicados: Apenas empresas com <strong>Email e Telefone</strong> serão listadas.</p>
+                            <h2 className="text-2xl font-bold text-slate-800">Nova Prospecção</h2>
+                            <p className="text-slate-500 text-sm">Limite diário: {DAILY_LEAD_LIMIT} leads. Restantes: <strong>{remainingDaily}</strong></p>
                         </div>
 
                         <form onSubmit={handleSearch} className="space-y-6">
                         
-                        {/* Seletor de Escopo */}
-                        <div className="flex p-1 bg-slate-100 rounded-lg w-fit">
-                            <button
-                                type="button"
-                                onClick={() => setSearchScope('cidade')}
-                                className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${searchScope === 'cidade' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                            >
-                                <Building className="w-4 h-4" />
-                                Cidade
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setSearchScope('estado')}
-                                className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${searchScope === 'estado' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                            >
-                                <Map className="w-4 h-4" />
-                                Estado
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setSearchScope('regiao')}
-                                className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${searchScope === 'regiao' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                            >
-                                <Globe className="w-4 h-4" />
-                                Região
-                            </button>
+                        <div className="flex flex-wrap gap-4 items-center">
+                            <div className="flex p-1 bg-slate-100 rounded-lg w-fit">
+                                <button
+                                    type="button"
+                                    onClick={() => setSearchScope('cidade')}
+                                    className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${searchScope === 'cidade' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                >
+                                    <Building className="w-4 h-4" />
+                                    Cidade
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSearchScope('estado')}
+                                    className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${searchScope === 'estado' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                >
+                                    <Map className="w-4 h-4" />
+                                    Estado
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSearchScope('regiao')}
+                                    className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${searchScope === 'regiao' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                >
+                                    <Globe className="w-4 h-4" />
+                                    Região
+                                </button>
+                            </div>
+
+                            {/* Campo de Quantidade */}
+                            <div className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg border border-slate-200">
+                                <label className="text-sm font-medium text-slate-700">Buscar:</label>
+                                <input 
+                                    type="number" 
+                                    min="1" 
+                                    max={remainingDaily} 
+                                    value={leadsRequested}
+                                    onChange={(e) => setLeadsRequested(Number(e.target.value))}
+                                    className="w-16 p-1 text-center bg-white border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                                    disabled={remainingDaily <= 0}
+                                />
+                                <span className="text-xs text-slate-500">leads</span>
+                            </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-                            {/* Input de Nicho */}
                             <div className="md:col-span-4">
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Nicho / Segmento</label>
                                 <div className="relative">
@@ -370,7 +415,6 @@ function App() {
                                 </div>
                             </div>
 
-                            {/* Inputs Dinâmicos de Localização */}
                             {searchScope === 'cidade' && (
                                 <>
                                     <div className="md:col-span-5">
@@ -438,11 +482,11 @@ function App() {
 
                         <button
                             type="submit"
-                            disabled={loading}
+                            disabled={loading || remainingDaily <= 0}
                             className="w-full px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-md shadow-indigo-200 transition-all hover:-translate-y-0.5 disabled:opacity-70 disabled:hover:translate-y-0 flex items-center justify-center gap-2"
                         >
                             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
-                            Prospectar Leads Qualificados
+                            {remainingDaily <= 0 ? "Limite Diário Atingido" : `Prospectar ${leadsRequested} Leads Qualificados`}
                         </button>
                         </form>
                     </div>
@@ -452,7 +496,7 @@ function App() {
                     <div className="p-4 bg-amber-50 text-amber-900 rounded-lg flex items-start gap-3 text-sm border border-amber-200 animate-in slide-in-from-top-2">
                     <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-amber-600" />
                     <div>
-                        <p className="font-bold">Resultado da Busca:</p>
+                        <p className="font-bold">Aviso:</p>
                         <p>{error}</p>
                     </div>
                     </div>
@@ -467,7 +511,6 @@ function App() {
                 </div>
             </>
           ) : (
-            // --- VIEW DE LEADS SALVOS (CRM) ---
             <div className="flex-1 h-full flex flex-col">
                 <div className="mb-4 flex items-center gap-2 text-indigo-800">
                     <Save className="w-6 h-6" />
