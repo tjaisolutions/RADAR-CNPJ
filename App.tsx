@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { EnrichedCompany, SearchHistoryItem, SearchQuery } from './types';
+import { EnrichedCompany, SearchHistoryItem, SearchQuery, User } from './types';
 import { prospectLeads, checkApiStatus } from './services/api';
 import ResultsTable from './components/ResultsTable';
 import HistorySidebar from './components/HistorySidebar';
 import LoginScreen from './components/LoginScreen';
-import { Menu, Layers, Loader2, Search, MapPin, Briefcase, AlertTriangle, Building, Map, Globe, ChevronDown, Save, LogOut } from 'lucide-react';
+import SettingsModal from './components/SettingsModal';
+import { Menu, Layers, Loader2, Search, MapPin, Briefcase, AlertTriangle, Building, Map, Globe, ChevronDown, Save, LogOut, Settings, User as UserIcon } from 'lucide-react';
 
 const REGIONS = [
     { label: 'Sudeste (SP, RJ, MG, ES)', value: 'SUDESTE' },
@@ -20,6 +21,7 @@ const STATES = [
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   
   const [niche, setNiche] = useState('');
   const [city, setCity] = useState('');
@@ -36,11 +38,18 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
   useEffect(() => {
     // Verifica autenticação
     const authStatus = localStorage.getItem('lead_app_auth');
+    const storedUser = localStorage.getItem('lead_app_current_user');
+    
     if (authStatus === 'true') {
         setIsAuthenticated(true);
+        if (storedUser) {
+            setCurrentUser(JSON.parse(storedUser));
+        }
     }
 
     // Carrega histórico
@@ -77,16 +86,18 @@ function App() {
     localStorage.setItem('lead_saved_companies', JSON.stringify(savedLeads));
   }, [savedLeads]);
 
-  const handleLogin = (status: boolean) => {
-    if (status) {
-        setIsAuthenticated(true);
-        localStorage.setItem('lead_app_auth', 'true');
-    }
+  const handleLogin = (user: User) => {
+    setIsAuthenticated(true);
+    setCurrentUser(user);
+    localStorage.setItem('lead_app_auth', 'true');
+    localStorage.setItem('lead_app_current_user', JSON.stringify(user));
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
+    setCurrentUser(null);
     localStorage.removeItem('lead_app_auth');
+    localStorage.removeItem('lead_app_current_user');
     // Limpa dados sensíveis da memória ao sair, se desejar
     setCurrentResults([]);
     setViewMode('search');
@@ -238,6 +249,12 @@ function App() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-100 font-sans">
+      <SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+        currentUser={currentUser}
+      />
+
       <HistorySidebar 
         history={history} 
         onSelect={loadFromHistory} 
@@ -264,14 +281,30 @@ function App() {
             </div>
           </div>
 
-          <button 
-            onClick={handleLogout}
-            className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"
-            title="Sair do sistema"
-          >
-            <LogOut className="w-4 h-4" />
-            <span className="hidden sm:inline">Sair</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-2 mr-4 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200">
+                <div className="w-6 h-6 bg-indigo-100 text-indigo-700 rounded-full flex items-center justify-center text-xs font-bold">
+                    {currentUser?.username.substring(0,2).toUpperCase()}
+                </div>
+                <span className="text-xs font-medium text-slate-600">{currentUser?.username}</span>
+            </div>
+
+            <button 
+                onClick={() => setIsSettingsOpen(true)}
+                className="p-2 hover:bg-slate-100 text-slate-500 hover:text-indigo-600 rounded-lg transition-colors"
+                title="Configurações & Usuários"
+            >
+                <Settings className="w-5 h-5" />
+            </button>
+            <button 
+                onClick={handleLogout}
+                className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"
+                title="Sair do sistema"
+            >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Sair</span>
+            </button>
+          </div>
         </header>
 
         <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full scroll-smooth">
