@@ -35,6 +35,7 @@ export interface SearchQuery {
   region_type: 'cidade' | 'estado' | 'regiao';
   selected_uf?: string;
   selected_region?: string;
+  limit: number; // Quantidade solicitada pelo usuário
 }
 
 export interface SearchHistoryItem {
