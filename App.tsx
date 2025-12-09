@@ -136,8 +136,17 @@ function App() {
     }
   };
 
+  const deleteHistoryItem = (id: string) => {
+    if (confirm("Deseja excluir este item do histórico?")) {
+        const newHistory = history.filter(item => item.id !== id);
+        setHistory(newHistory);
+        // Se o item deletado for o que está na tela atualmente, podemos ou não limpar a tela.
+        // Por UX, geralmente mantemos a tela preenchida ou limpamos. Vou manter.
+    }
+  };
+
   const clearHistory = () => {
-    if (confirm("Limpar histórico de prospecção?")) {
+    if (confirm("Limpar todo o histórico de prospecção?")) {
       setHistory([]);
       localStorage.removeItem('lead_search_history');
     }
@@ -148,6 +157,7 @@ function App() {
       <HistorySidebar 
         history={history} 
         onSelect={loadFromHistory} 
+        onDelete={deleteHistoryItem}
         onClear={clearHistory}
         isOpen={sidebarOpen}
       />
