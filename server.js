@@ -27,7 +27,6 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // --- BANCO DE DADOS SIMPLES (EM MEMÓRIA/ARQUIVO) ---
-// Em produção real, use MongoDB ou Postgres. Aqui usamos arquivo JSON para persistência básica no Render (efêmero).
 const DB_FILE = 'database.json';
 let DB = {
     users: [
@@ -76,7 +75,6 @@ app.post('/api/auth/login', (req, res) => {
     const user = DB.users.find(u => u.username === username && u.password === password);
     
     if (user) {
-        // Retorna user sem senha
         const { password, ...safeUser } = user;
         res.json({ success: true, user: safeUser });
     } else {
@@ -84,11 +82,10 @@ app.post('/api/auth/login', (req, res) => {
     }
 });
 
-// Sincronizar Dados (Carrega tudo ao entrar)
+// Sincronizar Dados
 app.get('/api/data/sync/:userId', (req, res) => {
     const { userId } = req.params;
     
-    // Verifica limite diário
     const today = new Date().toDateString();
     const dailyKey = `${today}_${userId}`;
     const dailyCount = DB.dailyCounts[dailyKey] || 0;
@@ -106,7 +103,6 @@ app.post('/api/data/history', (req, res) => {
     if (!DB.history[userId]) DB.history[userId] = [];
     DB.history[userId].unshift(item);
     
-    // Atualiza contador diário
     const today = new Date().toDateString();
     const dailyKey = `${today}_${userId}`;
     if (!DB.dailyCounts[dailyKey]) DB.dailyCounts[dailyKey] = 0;
@@ -138,7 +134,6 @@ app.post('/api/data/leads', (req, res) => {
     const { userId, lead } = req.body;
     if (!DB.savedLeads[userId]) DB.savedLeads[userId] = [];
     
-    // Evita duplicatas
     if (!DB.savedLeads[userId].some(l => l.cnpj === lead.cnpj)) {
         DB.savedLeads[userId].unshift(lead);
         saveDB();
@@ -155,14 +150,13 @@ app.delete('/api/data/leads/:userId/:cnpj', (req, res) => {
     res.json({ success: true });
 });
 
-// Gestão de Usuários (Apenas Admin deveria chamar, simplificado aqui)
+// Gestão de Usuários
 app.get('/api/users', (req, res) => {
     res.json(DB.users.map(({password, ...u}) => u));
 });
 
 app.post('/api/users', (req, res) => {
     const newUser = req.body;
-    // Validação simples
     if (DB.users.some(u => u.username === newUser.username)) {
         return res.status(400).json({ error: "Usuário já existe" });
     }
@@ -193,7 +187,7 @@ app.delete('/api/users/:id', (req, res) => {
 });
 
 
-// --- LÓGICA DE BUSCA (MANTIDA) ---
+// --- LÓGICA DE BUSCA ---
 
 const REGION_MAP = {
     'SUDESTE': ['SP', 'RJ', 'MG', 'ES'],
@@ -243,7 +237,13 @@ function mapCnpjaToSystem(record, nicho, origin = 'cnpja_direct') {
     let socios = [];
     if (record.company && record.company.members) {
         socios = record.company.members.map(m => ({
-            nome: m.person?.name || "Sócio",
+            nome: m.person?.name || m.name || "Sócio não informado",
+            qualificacao: m.role?.text || m.qualificacao || "Sócio"
+        }));
+    } else if (record.members) {
+         // Fallback para estrutura plana se existir
+         socios = record.members.map(m => ({
+            nome: m.person?.name || m.name || "Sócio não informado",
             qualificacao: m.role?.text || "Sócio"
         }));
     }
@@ -298,7 +298,7 @@ async function searchGoogleAndEnrich(niche, city, uf, limit = 10) {
     try {
         const googleResponse = await axios.post(
             'https://places.googleapis.com/v1/places:searchText',
-            { textQuery: `${niche} em ${city} ${uf}`, pageSize: 20 },
+            { textQuery: `${niche} em ${city} ${uf}`, pageSize: Math.min(limit * 3, 20) }, // Busca mais no Google para garantir filtragem
             {
                 headers: {
                     'Content-Type': 'application/json',
@@ -312,13 +312,16 @@ async function searchGoogleAndEnrich(niche, city, uf, limit = 10) {
         const places = googleResponse.data.places || [];
         console.log(`[SNIPER] Google encontrou ${places.length} locais.`);
 
-        if (places.length === 0) return null; 
+        if (places.length === 0) return []; 
 
         for (const place of places) {
             if (results.length >= limit) break;
             const companyName = place.displayName.text;
             
             try {
+                // Aguarda 4s entre requisições para evitar rate limit
+                await new Promise(r => setTimeout(r, 4000));
+                
                 const cnpjaResponse = await requestWithRetry('https://api.cnpja.com/office', {
                     headers: { 'Authorization': CNPJA_API_KEY },
                     params: {
@@ -329,7 +332,7 @@ async function searchGoogleAndEnrich(niche, city, uf, limit = 10) {
                         limit: 1
                     },
                     timeout: 20000
-                }, 3, 4000); 
+                }, 3, 15000); 
 
                 const records = cnpjaResponse.data.records || [];
                 
@@ -339,8 +342,12 @@ async function searchGoogleAndEnrich(niche, city, uf, limit = 10) {
                     const targetCity = normalizeString(city);
 
                     if (isLeadQualified(lead)) {
+                         // Validação estrita de cidade
                          if (leadCity.includes(targetCity) || targetCity.includes(leadCity)) {
-                            results.push(lead);
+                            // Evita duplicatas dentro do próprio sniper
+                            if (!results.some(r => r.cnpj === lead.cnpj)) {
+                                results.push(lead);
+                            }
                          }
                     }
                 }
@@ -350,7 +357,7 @@ async function searchGoogleAndEnrich(niche, city, uf, limit = 10) {
         }
     } catch (err) {
         console.error(`[SNIPER] Erro no Google Places: ${err.message}`);
-        return null;
+        return [];
     }
     return results;
 }
@@ -359,6 +366,8 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) 
     const targetUfs = Array.isArray(ufs) ? ufs : [ufs];
     const allResults = [];
     
+    console.log(`[DEEP SCAN] Buscando ${limit} leads em ${targetUfs.join(',')}...`);
+
     const MAX_UFS_TO_SEARCH = targetUfs.length > 3 ? 3 : targetUfs.length; 
     const MAX_PAGES_PER_UF = cityFilter ? 5 : 3; 
 
@@ -382,6 +391,9 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) 
             else params['names.in'] = niche;
             
             try {
+                // Delay menor para busca em lote
+                await new Promise(r => setTimeout(r, 1000));
+                
                 const response = await requestWithRetry('https://api.cnpja.com/office', {
                     headers: { 'Authorization': CNPJA_API_KEY },
                     params: params,
@@ -392,7 +404,7 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) 
                 nextToken = response.data.next; 
                 pageCount++;
 
-                const mapped = records.map(r => mapCnpjaToSystem(r, niche));
+                const mapped = records.map(r => mapCnpjaToSystem(r, niche, 'deep_scan'));
                 const filtered = mapped.filter(lead => {
                     if (!isLeadQualified(lead)) return false;
                     if (cityFilter) {
@@ -404,10 +416,14 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) 
                 });
 
                 for (const lead of filtered) {
-                    if (allResults.length < limit) allResults.push(lead);
-                    else break;
+                    if (allResults.length < limit) {
+                        if (!allResults.some(r => r.cnpj === lead.cnpj)) {
+                            allResults.push(lead);
+                        }
+                    } else break;
                 }
             } catch (error) {
+                console.error(`[DEEP SCAN] Erro na UF ${uf}:`, error.message);
                 break; 
             }
 
@@ -417,14 +433,18 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) 
 }
 
 app.get('/api/status', (req, res) => {
+    console.log("[SERVER] Wake up call received");
     res.json({ status: 'online' });
 });
 
 app.post('/api/start-search', async (req, res) => {
     const jobId = crypto.randomUUID();
     jobs[jobId] = { id: jobId, startTime: Date.now(), status: 'running', results: [], error: null };
+    
+    // Resposta imediata para evitar timeout do navegador
     res.json({ jobId, message: "Busca iniciada" });
 
+    // Processamento assíncrono desbloqueado
     setTimeout(async () => {
         const { niche, location, region_type, selected_uf, selected_region, limit = 10 } = req.body;
         
@@ -445,20 +465,40 @@ app.post('/api/start-search', async (req, res) => {
         }
 
         try {
-            let results = null;
+            let finalResults = [];
+
+            // 1. TENTA GOOGLE (SNIPER) SE FOR CIDADE
             if (region_type === 'cidade' && cityName) {
-                results = await searchGoogleAndEnrich(niche, cityName, targetUfs[0], limit);
+                const googleResults = await searchGoogleAndEnrich(niche, cityName, targetUfs[0], limit);
+                if (googleResults && googleResults.length > 0) {
+                    finalResults.push(...googleResults);
+                }
             }
-            if (!results || results.length === 0) {
-                results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter, limit);
+
+            // 2. COMPLEMENTO INTELIGENTE (Se não atingiu o limite, busca mais via Deep Scan)
+            if (finalResults.length < limit) {
+                const remaining = limit - finalResults.length;
+                console.log(`[COMPLEMENTO] Encontrados ${finalResults.length} leads. Buscando mais ${remaining} via Deep Scan...`);
+                
+                // Deep scan usa cityFilter para tentar filtrar pela cidade na busca ampla
+                // Se não for busca por cidade, cityFilter é null, então busca no estado/região
+                const directResults = await searchDirectlyInCnpja(niche, targetUfs, cityFilter, remaining);
+                
+                // Filtra duplicados (caso o Google tenha achado algo que o Deep Scan também ache)
+                for (const lead of directResults) {
+                     if (!finalResults.some(r => r.cnpj === lead.cnpj)) {
+                         finalResults.push(lead);
+                     }
+                     if (finalResults.length >= limit) break;
+                }
             }
             
-            if (results && results.length > 0) {
-                jobs[jobId].results.push(...results);
+            if (finalResults.length > 0) {
+                jobs[jobId].results = finalResults;
             } else {
                 let msg = `Nenhum lead com Email e Telefone encontrado para "${niche}"`;
                 if (cityFilter) msg += ` em ${cityFilter}`;
-                jobs[jobId].error = msg + ". Tente expandir para o Estado.";
+                jobs[jobId].error = msg + ". Tente expandir a busca para o Estado.";
             }
         } catch (error) {
             console.error(`[JOB ${jobId}] Erro Fatal:`, error);
