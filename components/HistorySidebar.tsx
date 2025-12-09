@@ -1,6 +1,6 @@
 import React from 'react';
 import { SearchHistoryItem } from '../types';
-import { History, Trash2, ChevronRight, Target, MapPin } from 'lucide-react';
+import { History, Trash2, ChevronRight, Target, MapPin, Save, List } from 'lucide-react';
 
 interface HistorySidebarProps {
   history: SearchHistoryItem[];
@@ -8,13 +8,35 @@ interface HistorySidebarProps {
   onDelete: (id: string) => void;
   onClear: () => void;
   isOpen: boolean;
+  savedLeadsCount: number;
+  onViewSaved: () => void;
+  activeView: 'search' | 'saved';
 }
 
-const HistorySidebar: React.FC<HistorySidebarProps> = ({ history, onSelect, onDelete, onClear, isOpen }) => {
+const HistorySidebar: React.FC<HistorySidebarProps> = ({ 
+    history, onSelect, onDelete, onClear, isOpen, savedLeadsCount, onViewSaved, activeView 
+}) => {
   if (!isOpen) return null;
 
   return (
     <div className="w-full md:w-80 bg-white border-r border-slate-200 h-full flex flex-col shadow-lg fixed md:relative z-20 transition-all">
+      
+      {/* Botão para Leads Salvos */}
+      <div className="p-4 bg-indigo-50 border-b border-indigo-100">
+        <button 
+            onClick={onViewSaved}
+            className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${activeView === 'saved' ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
+        >
+            <div className="flex items-center gap-2 font-bold text-sm">
+                <Save className="w-4 h-4" />
+                <span className="uppercase">MEUS LEADS SALVOS</span>
+            </div>
+            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${activeView === 'saved' ? 'bg-indigo-500 text-white' : 'bg-indigo-100 text-indigo-700'}`}>
+                {savedLeadsCount}
+            </span>
+        </button>
+      </div>
+
       <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
         <div className="flex items-center gap-2 text-slate-700 font-semibold">
           <History className="w-5 h-5 text-indigo-600" />
