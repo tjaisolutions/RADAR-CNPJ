@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Lock, User, AlertCircle, CheckCircle2, Plus, Trash2, Shield, UserCog, Settings } from 'lucide-react';
+import { X, Save, Lock, User, AlertCircle, CheckCircle2, Plus, Trash2, Shield, UserCog, Settings, Pencil } from 'lucide-react';
 import { User as UserType } from '../types';
 
 interface SettingsModalProps {
@@ -12,9 +12,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, currentU
   const [activeTab, setActiveTab] = useState<'profile' | 'users'>('profile');
   const [users, setUsers] = useState<UserType[]>([]);
   
-  // State for Adding New User
-  const [newUsername, setNewUsername] = useState('');
-  const [newPassword, setNewPassword] = useState('');
+  // State for User Form (Add/Edit)
+  const [formUsername, setFormUsername] = useState('');
+  const [formPassword, setFormPassword] = useState('');
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   
   // State for Changing Own Password
   const [myUsername, setMyUsername] = useState('');
@@ -28,8 +29,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, currentU
       loadUsers();
       setError('');
       setSuccess('');
-      setNewUsername('');
-      setNewPassword('');
+      resetUserForm();
       if (currentUser) {
           setMyUsername(currentUser.username);
           setMyPassword(currentUser.password);
@@ -43,6 +43,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, currentU
     if (usersData) {
         setUsers(JSON.parse(usersData));
     }
+  };
+
+  const resetUserForm = () => {
+      setFormUsername('');
+      setFormPassword('');
+      setEditingUserId(null);
   };
 
   const handleUpdateProfile = (e: React.FormEvent) => {
@@ -71,36 +77,58 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, currentU
       localStorage.setItem('lead_app_current_user', JSON.stringify(updatedCurrentUser));
   };
 
-  const handleAddUser = (e: React.FormEvent) => {
+  const handleStartEdit = (user: UserType) => {
+      setEditingUserId(user.id);
+      setFormUsername(user.username);
+      setFormPassword(user.password);
+      setError('');
+      setSuccess('');
+  };
+
+  const handleSaveUser = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
 
-    if (!newUsername || !newPassword) {
+    if (!formUsername || !formPassword) {
         setError("Preencha usuário e senha.");
         return;
     }
 
-    if (users.some(u => u.username === newUsername)) {
+    // Verifica duplicidade de nome (apenas se não for o próprio usuário que estamos editando)
+    const nameExists = users.some(u => u.username === formUsername && u.id !== editingUserId);
+    if (nameExists) {
         setError("Este nome de usuário já existe.");
         return;
     }
 
-    const newUser: UserType = {
-        id: crypto.randomUUID(),
-        username: newUsername,
-        password: newPassword,
-        role: 'user', 
-        createdAt: Date.now()
-    };
+    let updatedUsers = [...users];
 
-    const updatedUsers = [...users, newUser];
+    if (editingUserId) {
+        // EDITAR USUÁRIO EXISTENTE
+        updatedUsers = users.map(u => {
+            if (u.id === editingUserId) {
+                return { ...u, username: formUsername, password: formPassword };
+            }
+            return u;
+        });
+        setSuccess(`Usuário ${formUsername} atualizado com sucesso!`);
+    } else {
+        // ADICIONAR NOVO USUÁRIO
+        const newUser: UserType = {
+            id: crypto.randomUUID(),
+            username: formUsername,
+            password: formPassword,
+            role: 'user', 
+            createdAt: Date.now()
+        };
+        updatedUsers.push(newUser);
+        setSuccess(`Usuário ${formUsername} criado com sucesso!`);
+    }
+
     localStorage.setItem('lead_app_users_v2', JSON.stringify(updatedUsers));
-    
     setUsers(updatedUsers);
-    setNewUsername('');
-    setNewPassword('');
-    setSuccess(`Usuário ${newUsername} criado com sucesso!`);
+    resetUserForm();
   };
 
   const handleDeleteUser = (userId: string) => {
@@ -118,6 +146,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, currentU
         const updatedUsers = users.filter(u => u.id !== userId);
         localStorage.setItem('lead_app_users_v2', JSON.stringify(updatedUsers));
         setUsers(updatedUsers);
+        
+        // Se estava editando este usuário, reseta o formulário
+        if (editingUserId === userId) {
+            resetUserForm();
+        }
+        
         setSuccess("Usuário removido.");
     }
   };
@@ -150,7 +184,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, currentU
             </button>
             {isAdmin && (
                 <button
-                    onClick={() => { setActiveTab('users'); setError(''); setSuccess(''); }}
+                    onClick={() => { setActiveTab('users'); setError(''); setSuccess(''); resetUserForm(); }}
                     className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors flex items-center justify-center gap-2 ${activeTab === 'users' ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
                 >
                     <Shield className="w-4 h-4" />
@@ -221,9 +255,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, currentU
                             <User className="w-4 h-4" />
                             Usuários Existentes
                         </h4>
-                        <div className="bg-slate-50 rounded-lg border border-slate-200 divide-y divide-slate-200">
+                        <div className="bg-slate-50 rounded-lg border border-slate-200 divide-y divide-slate-200 max-h-[300px] overflow-y-auto">
                             {users.map(user => (
-                                <div key={user.id} className="p-3 flex items-center justify-between group">
+                                <div key={user.id} className={`p-3 flex items-center justify-between group transition-colors ${editingUserId === user.id ? 'bg-indigo-50 border-indigo-200' : 'hover:bg-slate-50'}`}>
                                     <div className="flex items-center gap-3">
                                         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${user.username === currentUser?.username ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
                                             {user.username.substring(0,2).toUpperCase()}
@@ -236,53 +270,86 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, currentU
                                             <p className="text-[10px] text-slate-400">Criado em: {new Date(user.createdAt).toLocaleDateString()}</p>
                                         </div>
                                     </div>
-                                    {user.username !== currentUser?.username && (
+                                    <div className="flex items-center gap-1">
                                         <button 
-                                            onClick={() => handleDeleteUser(user.id)}
-                                            className="text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded transition-colors"
-                                            title="Remover Usuário"
+                                            onClick={() => handleStartEdit(user)}
+                                            className={`p-2 rounded transition-colors ${editingUserId === user.id ? 'text-indigo-600 bg-indigo-100' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
+                                            title="Editar Usuário"
                                         >
-                                            <Trash2 className="w-4 h-4" />
+                                            <Pencil className="w-4 h-4" />
                                         </button>
-                                    )}
+                                        {user.username !== currentUser?.username && (
+                                            <button 
+                                                onClick={() => handleDeleteUser(user.id)}
+                                                className="text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded transition-colors"
+                                                title="Remover Usuário"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
                             ))}
                         </div>
                     </div>
 
-                    {/* ADICIONAR NOVO USUÁRIO */}
+                    {/* FORMULÁRIO (ADICIONAR / EDITAR) */}
                     <div className="space-y-4">
-                        <h4 className="font-semibold text-slate-700 flex items-center gap-2">
-                            <Plus className="w-4 h-4" />
-                            Adicionar Novo Usuário
-                        </h4>
-                        <form onSubmit={handleAddUser} className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h4 className="font-semibold text-slate-700 flex items-center gap-2">
+                                {editingUserId ? (
+                                    <>
+                                        <Pencil className="w-4 h-4 text-indigo-600" />
+                                        <span className="text-indigo-700">Editando Usuário</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Plus className="w-4 h-4" />
+                                        Adicionar Novo Usuário
+                                    </>
+                                )}
+                            </h4>
+                            {editingUserId && (
+                                <button 
+                                    onClick={resetUserForm}
+                                    className="text-xs text-red-500 hover:underline"
+                                >
+                                    Cancelar
+                                </button>
+                            )}
+                        </div>
+
+                        <form onSubmit={handleSaveUser} className={`bg-slate-50 p-4 rounded-lg border space-y-4 transition-all ${editingUserId ? 'border-indigo-200 shadow-sm bg-indigo-50/30' : 'border-slate-200'}`}>
                             <div className="space-y-2">
-                                <label className="text-xs font-semibold text-slate-500 uppercase">Novo Usuário</label>
+                                <label className="text-xs font-semibold text-slate-500 uppercase">
+                                    {editingUserId ? "Editar Nome de Usuário" : "Novo Usuário"}
+                                </label>
                                 <input
                                     type="text"
-                                    value={newUsername}
-                                    onChange={(e) => setNewUsername(e.target.value)}
+                                    value={formUsername}
+                                    onChange={(e) => setFormUsername(e.target.value)}
                                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
                                     placeholder="Ex: comercial"
                                 />
                             </div>
                             <div className="space-y-2">
-                                <label className="text-xs font-semibold text-slate-500 uppercase">Senha de Acesso</label>
+                                <label className="text-xs font-semibold text-slate-500 uppercase">
+                                    {editingUserId ? "Nova Senha" : "Senha de Acesso"}
+                                </label>
                                 <input
-                                    type="password"
-                                    value={newPassword}
-                                    onChange={(e) => setNewPassword(e.target.value)}
+                                    type="text" // Showing password visible as requested context often implies simple management
+                                    value={formPassword}
+                                    onChange={(e) => setFormPassword(e.target.value)}
                                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
                                     placeholder="******"
                                 />
                             </div>
                             <button
                                 type="submit"
-                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium shadow-sm transition-colors flex items-center justify-center gap-2 text-sm"
+                                className={`w-full py-2 text-white rounded-lg font-medium shadow-sm transition-colors flex items-center justify-center gap-2 text-sm ${editingUserId ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
                             >
                                 <Save className="w-4 h-4" />
-                                Criar Usuário
+                                {editingUserId ? "Salvar Alterações" : "Criar Usuário"}
                             </button>
                         </form>
                     </div>
