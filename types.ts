@@ -44,3 +44,11 @@ export interface SearchHistoryItem {
   resultCount: number;
   results: EnrichedCompany[];
 }
+
+export interface User {
+    id: string;
+    username: string;
+    password: string; // In a real app, never store plain text passwords
+    role: 'admin' | 'user';
+    createdAt: number;
+}
