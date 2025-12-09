@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Lock, User, LogIn, AlertCircle, Layers } from 'lucide-react';
 import { User as UserType } from '../types';
+import { loginUser } from '../services/api';
 
 interface LoginScreenProps {
   onLogin: (user: UserType) => void;
@@ -12,66 +13,30 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    // --- DATA MIGRATION & INITIALIZATION ---
-    // Verifica se já existe a lista de usuários nova
-    const usersData = localStorage.getItem('lead_app_users_v2');
-    
-    if (!usersData) {
-        // Se não existe, verifica se tinha o login antigo
-        const oldUser = localStorage.getItem('lead_app_user') || 'admin';
-        const oldPass = localStorage.getItem('lead_app_pass') || '123';
-        
-        // Cria a estrutura inicial com o usuário antigo ou o padrão
-        const initialUsers: UserType[] = [
-            { 
-                id: '1', 
-                username: oldUser, 
-                password: oldPass, 
-                role: 'admin',
-                createdAt: Date.now() 
-            }
-        ];
-        
-        localStorage.setItem('lead_app_users_v2', JSON.stringify(initialUsers));
-    }
-  }, []);
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    // Simulação de delay para sensação de segurança
-    setTimeout(() => {
-      try {
-        const usersData = localStorage.getItem('lead_app_users_v2');
-        const users: UserType[] = usersData ? JSON.parse(usersData) : [];
-
-        const foundUser = users.find(u => u.username === username && u.password === password);
-
-        if (foundUser) {
-          onLogin(foundUser);
+    try {
+        const data = await loginUser(username, password);
+        if (data.success) {
+            onLogin(data.user);
         } else {
-          setError('Usuário ou senha incorretos.');
-          setLoading(false);
+            setError(data.message || 'Erro no login');
         }
-      } catch (e) {
-        setError('Erro ao processar dados de login.');
+    } catch (e) {
+        setError('Falha ao conectar ao servidor.');
+    } finally {
         setLoading(false);
-      }
-    }, 600);
+    }
   };
 
   return (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
-        
-        {/* Header Decorativo */}
         <div className="bg-indigo-600 p-8 text-center relative overflow-hidden">
           <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white/10 rounded-full blur-xl"></div>
-          <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-24 h-24 bg-white/10 rounded-full blur-xl"></div>
-          
           <div className="relative z-10 flex flex-col items-center">
             <div className="w-16 h-16 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm mb-4">
               <Layers className="w-8 h-8 text-white" />
@@ -81,12 +46,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
           </div>
         </div>
 
-        {/* Formulário */}
         <div className="p-8">
           <form onSubmit={handleLogin} className="space-y-6">
-            
             {error && (
-              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm flex items-center gap-2 border border-red-100 animate-in fade-in slide-in-from-top-1">
+              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm flex items-center gap-2 border border-red-100 animate-in fade-in">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 {error}
               </div>
@@ -95,15 +58,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700 ml-1">Usuário</label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <User className="h-5 w-5 text-slate-400" />
-                </div>
+                <User className="absolute inset-y-0 left-0 pl-3 pt-3 h-8 w-8 text-slate-400" />
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-slate-50 transition-all outline-none"
-                  placeholder="admin"
+                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-slate-50 outline-none"
                   required
                 />
               </div>
@@ -112,15 +72,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-700 ml-1">Senha</label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-slate-400" />
-                </div>
+                <Lock className="absolute inset-y-0 left-0 pl-3 pt-3 h-8 w-8 text-slate-400" />
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-slate-50 transition-all outline-none"
-                  placeholder="••••"
+                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-slate-50 outline-none"
                   required
                 />
               </div>
@@ -129,24 +86,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-70 disabled:cursor-not-allowed transition-all hover:-translate-y-0.5"
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-sm transition-all disabled:opacity-70 flex items-center justify-center gap-2"
             >
-              {loading ? (
-                <>Acessando...</>
-              ) : (
-                <>
-                  <LogIn className="w-4 h-4" />
-                  Entrar no Sistema
-                </>
-              )}
+              {loading ? "Acessando..." : <><LogIn className="w-4 h-4" /> Entrar</>}
             </button>
           </form>
-
-          <div className="mt-8 text-center">
-            <p className="text-xs text-slate-400">
-              © {new Date().getFullYear()} Lead Enriched Pro. Todos os direitos reservados.
-            </p>
-          </div>
         </div>
       </div>
     </div>
