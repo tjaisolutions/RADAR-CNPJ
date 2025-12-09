@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
 const crypto = require('crypto');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,6 +26,37 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
+// --- BANCO DE DADOS SIMPLES (EM MEMÓRIA/ARQUIVO) ---
+// Em produção real, use MongoDB ou Postgres. Aqui usamos arquivo JSON para persistência básica no Render (efêmero).
+const DB_FILE = 'database.json';
+let DB = {
+    users: [
+        { id: '1', username: 'admin', password: '123', role: 'admin', createdAt: Date.now() }
+    ],
+    history: {},     // { userId: [items] }
+    savedLeads: {},  // { userId: [leads] }
+    dailyCounts: {}  // { date_userId: count }
+};
+
+// Carrega DB do arquivo se existir
+if (fs.existsSync(DB_FILE)) {
+    try {
+        const data = fs.readFileSync(DB_FILE);
+        DB = JSON.parse(data);
+    } catch (e) {
+        console.error("Erro ao carregar DB:", e);
+    }
+}
+
+function saveDB() {
+    try {
+        fs.writeFileSync(DB_FILE, JSON.stringify(DB, null, 2));
+    } catch (e) {
+        console.error("Erro ao salvar DB:", e);
+    }
+}
+
+// Jobs de busca em background
 const jobs = {}; 
 
 setInterval(() => {
@@ -36,7 +68,133 @@ setInterval(() => {
     }
 }, 600000);
 
-// --- MAPAS DE REGIÃO ---
+// --- ROTAS DE DADOS (CENTRALIZAÇÃO) ---
+
+// Login
+app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body;
+    const user = DB.users.find(u => u.username === username && u.password === password);
+    
+    if (user) {
+        // Retorna user sem senha
+        const { password, ...safeUser } = user;
+        res.json({ success: true, user: safeUser });
+    } else {
+        res.status(401).json({ success: false, message: "Credenciais inválidas" });
+    }
+});
+
+// Sincronizar Dados (Carrega tudo ao entrar)
+app.get('/api/data/sync/:userId', (req, res) => {
+    const { userId } = req.params;
+    
+    // Verifica limite diário
+    const today = new Date().toDateString();
+    const dailyKey = `${today}_${userId}`;
+    const dailyCount = DB.dailyCounts[dailyKey] || 0;
+
+    res.json({
+        history: DB.history[userId] || [],
+        savedLeads: DB.savedLeads[userId] || [],
+        dailyCount: dailyCount
+    });
+});
+
+// Salvar Histórico
+app.post('/api/data/history', (req, res) => {
+    const { userId, item } = req.body;
+    if (!DB.history[userId]) DB.history[userId] = [];
+    DB.history[userId].unshift(item);
+    
+    // Atualiza contador diário
+    const today = new Date().toDateString();
+    const dailyKey = `${today}_${userId}`;
+    if (!DB.dailyCounts[dailyKey]) DB.dailyCounts[dailyKey] = 0;
+    DB.dailyCounts[dailyKey] += item.resultCount;
+
+    saveDB();
+    res.json({ success: true, dailyCount: DB.dailyCounts[dailyKey] });
+});
+
+// Excluir Histórico
+app.delete('/api/data/history/:userId/:itemId', (req, res) => {
+    const { userId, itemId } = req.params;
+    if (DB.history[userId]) {
+        DB.history[userId] = DB.history[userId].filter(i => i.id !== itemId);
+        saveDB();
+    }
+    res.json({ success: true });
+});
+
+app.delete('/api/data/history/clear/:userId', (req, res) => {
+    const { userId } = req.params;
+    DB.history[userId] = [];
+    saveDB();
+    res.json({ success: true });
+});
+
+// Leads Salvos
+app.post('/api/data/leads', (req, res) => {
+    const { userId, lead } = req.body;
+    if (!DB.savedLeads[userId]) DB.savedLeads[userId] = [];
+    
+    // Evita duplicatas
+    if (!DB.savedLeads[userId].some(l => l.cnpj === lead.cnpj)) {
+        DB.savedLeads[userId].unshift(lead);
+        saveDB();
+    }
+    res.json({ success: true });
+});
+
+app.delete('/api/data/leads/:userId/:cnpj', (req, res) => {
+    const { userId, cnpj } = req.params;
+    if (DB.savedLeads[userId]) {
+        DB.savedLeads[userId] = DB.savedLeads[userId].filter(l => l.cnpj !== cnpj);
+        saveDB();
+    }
+    res.json({ success: true });
+});
+
+// Gestão de Usuários (Apenas Admin deveria chamar, simplificado aqui)
+app.get('/api/users', (req, res) => {
+    res.json(DB.users.map(({password, ...u}) => u));
+});
+
+app.post('/api/users', (req, res) => {
+    const newUser = req.body;
+    // Validação simples
+    if (DB.users.some(u => u.username === newUser.username)) {
+        return res.status(400).json({ error: "Usuário já existe" });
+    }
+    DB.users.push(newUser);
+    saveDB();
+    res.json({ success: true, user: newUser });
+});
+
+app.put('/api/users/:id', (req, res) => {
+    const { id } = req.params;
+    const updates = req.body;
+    const index = DB.users.findIndex(u => u.id === id);
+    
+    if (index !== -1) {
+        DB.users[index] = { ...DB.users[index], ...updates };
+        saveDB();
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: "Usuário não encontrado" });
+    }
+});
+
+app.delete('/api/users/:id', (req, res) => {
+    const { id } = req.params;
+    DB.users = DB.users.filter(u => u.id !== id);
+    saveDB();
+    res.json({ success: true });
+});
+
+
+// --- LÓGICA DE BUSCA (MANTIDA) ---
+
 const REGION_MAP = {
     'SUDESTE': ['SP', 'RJ', 'MG', 'ES'],
     'SUL': ['PR', 'RS', 'SC'],
@@ -45,30 +203,22 @@ const REGION_MAP = {
     'NORTE': ['AM', 'PA', 'AC', 'RR', 'RO', 'AP', 'TO']
 };
 
-/**
- * Remove acentos para comparação de strings
- */
 function normalizeString(str) {
     if (!str) return "";
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 
-/**
- * FUNÇÃO DE REQUISIÇÃO SEGURA COM RETRY (Trata Erro 429)
- */
 async function requestWithRetry(url, config, retries = 3, baseDelay = 2000) {
     for (let i = 0; i < retries; i++) {
         try {
-            // Delay respeitoso antes de qualquer chamada
             await new Promise(r => setTimeout(r, baseDelay));
             return await axios.get(url, config);
         } catch (error) {
             const isRateLimit = error.response && error.response.status === 429;
             const isLastAttempt = i === retries - 1;
-
             if (isRateLimit && !isLastAttempt) {
-                const waitTime = (i + 1) * 5000; // 5s, 10s, 15s...
-                console.log(`[API] Rate Limit (429) detectado. Aguardando ${waitTime/1000}s para tentar novamente...`);
+                const waitTime = (i + 1) * 5000; 
+                console.log(`[API] Rate Limit (429) detectado. Aguardando ${waitTime/1000}s...`);
                 await new Promise(r => setTimeout(r, waitTime));
                 continue;
             }
@@ -80,7 +230,6 @@ async function requestWithRetry(url, config, retries = 3, baseDelay = 2000) {
 function mapCnpjaToSystem(record, nicho, origin = 'cnpja_direct') {
     let telefone = null;
     if (record.phones && record.phones.length > 0) {
-        // Pega preferencialmente celular
         const mobile = record.phones.find(p => p.type === 'MOBILE');
         const phone = mobile || record.phones[0];
         telefone = `(${phone.area}) ${phone.number}`;
@@ -138,29 +287,18 @@ function mapCnpjaToSystem(record, nicho, origin = 'cnpja_direct') {
     };
 }
 
-/**
- * Verifica se o lead é qualificado (Tem email E telefone)
- */
 function isLeadQualified(lead) {
     return lead.contato.email && lead.contato.telefone;
 }
 
-/**
- * ESTRATÉGIA SNIPER: Google Places -> CNPJa Enrichment
- * Usa o Google para achar locais exatos e a CNPJa para pegar dados.
- */
 async function searchGoogleAndEnrich(niche, city, uf, limit = 10) {
     console.log(`[SNIPER] Buscando no Google: ${niche} em ${city} ${uf} (Limite: ${limit})`);
     const results = [];
 
     try {
-        // 1. Busca no Google Places API (New)
         const googleResponse = await axios.post(
             'https://places.googleapis.com/v1/places:searchText',
-            {
-                textQuery: `${niche} em ${city} ${uf}`,
-                pageSize: 20 
-            },
+            { textQuery: `${niche} em ${city} ${uf}`, pageSize: 20 },
             {
                 headers: {
                     'Content-Type': 'application/json',
@@ -176,14 +314,8 @@ async function searchGoogleAndEnrich(niche, city, uf, limit = 10) {
 
         if (places.length === 0) return null; 
 
-        // Otimização: Não precisamos processar todos se o limite for menor
-        const placesToProcess = places; 
-
-        // 2. Enriquecimento via CNPJa (Com Rate Limit Controlado e Validação de Cidade)
-        for (const place of placesToProcess) {
-            // Se já atingiu o limite, para imediatamente
+        for (const place of places) {
             if (results.length >= limit) break;
-
             const companyName = place.displayName.text;
             
             try {
@@ -203,52 +335,38 @@ async function searchGoogleAndEnrich(niche, city, uf, limit = 10) {
                 
                 if (records.length > 0) {
                     const lead = mapCnpjaToSystem(records[0], niche, 'google_enriched');
-                    
                     const leadCity = normalizeString(lead.endereco.municipio);
                     const targetCity = normalizeString(city);
 
                     if (isLeadQualified(lead)) {
                          if (leadCity.includes(targetCity) || targetCity.includes(leadCity)) {
                             results.push(lead);
-                         } else {
-                            console.log(`[SNIPER] Ignorado: ${lead.nome_fantasia} é de ${lead.endereco.municipio} (Alvo: ${city})`);
                          }
                     }
                 }
-
             } catch (enrichErr) {
                 console.error(`[SNIPER] Falha ao enriquecer "${companyName}": ${enrichErr.message}`);
             }
         }
-
     } catch (err) {
         console.error(`[SNIPER] Erro no Google Places: ${err.message}`);
         return null;
     }
-
     return results;
 }
 
-/**
- * ESTRATÉGIA DEEP SCAN: Busca direta na CNPJa (Backup ou para Estados/Regiões)
- */
 async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) {
     const targetUfs = Array.isArray(ufs) ? ufs : [ufs];
     const allResults = [];
     
-    // Limite de segurança
     const MAX_UFS_TO_SEARCH = targetUfs.length > 3 ? 3 : targetUfs.length; 
     const MAX_PAGES_PER_UF = cityFilter ? 5 : 3; 
 
     for (let i = 0; i < MAX_UFS_TO_SEARCH; i++) {
-        if (allResults.length >= limit) break; // Para se já atingiu o limite
-
+        if (allResults.length >= limit) break;
         const uf = targetUfs[i];
         let nextToken = null;
         let pageCount = 0;
-        let foundInUf = 0;
-
-        console.log(`[CNPJa] Iniciando Deep Scan em ${uf} para: ${niche} (Cidade alvo: ${cityFilter || 'Todas'})...`);
 
         do {
             if (allResults.length >= limit) break;
@@ -260,12 +378,8 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) 
                 'phones.ex': true,
                 limit: 100 
             };
-
-            if (nextToken) {
-                params.token = nextToken;
-            } else {
-                params['names.in'] = niche;
-            }
+            if (nextToken) params.token = nextToken;
+            else params['names.in'] = niche;
             
             try {
                 const response = await requestWithRetry('https://api.cnpja.com/office', {
@@ -279,7 +393,6 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) 
                 pageCount++;
 
                 const mapped = records.map(r => mapCnpjaToSystem(r, niche));
-                
                 const filtered = mapped.filter(lead => {
                     if (!isLeadQualified(lead)) return false;
                     if (cityFilter) {
@@ -290,42 +403,26 @@ async function searchDirectlyInCnpja(niche, ufs, cityFilter = null, limit = 10) 
                     return true;
                 });
 
-                // Adiciona apenas até atingir o limite solicitado
                 for (const lead of filtered) {
-                    if (allResults.length < limit) {
-                        allResults.push(lead);
-                    } else {
-                        break;
-                    }
+                    if (allResults.length < limit) allResults.push(lead);
+                    else break;
                 }
-                
-                foundInUf += filtered.length;
-                console.log(`[CNPJa] ${uf} Página ${pageCount}: Encontrados ${filtered.length} leads qualificados. Total acumulado: ${allResults.length}/${limit}`);
-
             } catch (error) {
-                console.error(`Erro buscando em ${uf} na página ${pageCount}:`, error.message);
                 break; 
             }
 
         } while (nextToken && pageCount < MAX_PAGES_PER_UF && allResults.length < limit);
     }
-
     return allResults;
 }
 
-
-// --- ROTAS ---
-
 app.get('/api/status', (req, res) => {
-    console.log("[WAKE UP] Servidor acordado!");
     res.json({ status: 'online' });
 });
 
 app.post('/api/start-search', async (req, res) => {
     const jobId = crypto.randomUUID();
     jobs[jobId] = { id: jobId, startTime: Date.now(), status: 'running', results: [], error: null };
-    
-    // RESPOSTA IMEDIATA
     res.json({ jobId, message: "Busca iniciada" });
 
     setTimeout(async () => {
@@ -338,9 +435,7 @@ app.post('/api/start-search', async (req, res) => {
         if (region_type === 'cidade') {
             targetUfs = [selected_uf || 'SP'];
             const parts = location.split(' ');
-            if (parts.length > 1 && parts[parts.length-1].length === 2) {
-                 parts.pop(); 
-            }
+            if (parts.length > 1 && parts[parts.length-1].length === 2) parts.pop(); 
             cityName = parts.join(' ').replace(',', '').trim();
             cityFilter = cityName;
         } else if (region_type === 'estado') {
@@ -350,18 +445,11 @@ app.post('/api/start-search', async (req, res) => {
         }
 
         try {
-            console.log(`[JOB ${jobId}] Iniciando. Tipo: ${region_type}. Nicho: ${niche}. Limite: ${limit}`);
-
             let results = null;
-
-            // 1. TENTA ESTRATÉGIA SNIPER (GOOGLE) SE FOR BUSCA POR CIDADE
             if (region_type === 'cidade' && cityName) {
                 results = await searchGoogleAndEnrich(niche, cityName, targetUfs[0], limit);
             }
-
-            // 2. FALLBACK PARA DEEP SCAN (CNPJa DIRETO)
             if (!results || results.length === 0) {
-                if (region_type === 'cidade') console.log(`[JOB ${jobId}] Sniper falhou ou sem resultados. Ativando Deep Scan (CNPJa Direto)...`);
                 results = await searchDirectlyInCnpja(niche, targetUfs, cityFilter, limit);
             }
             
@@ -372,7 +460,6 @@ app.post('/api/start-search', async (req, res) => {
                 if (cityFilter) msg += ` em ${cityFilter}`;
                 jobs[jobId].error = msg + ". Tente expandir para o Estado.";
             }
-
         } catch (error) {
             console.error(`[JOB ${jobId}] Erro Fatal:`, error);
             jobs[jobId].error = "Erro interno no servidor ao processar busca.";
