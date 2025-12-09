@@ -3,7 +3,8 @@ import { EnrichedCompany, SearchHistoryItem, SearchQuery } from './types';
 import { prospectLeads, checkApiStatus } from './services/api';
 import ResultsTable from './components/ResultsTable';
 import HistorySidebar from './components/HistorySidebar';
-import { Menu, Layers, Loader2, Search, MapPin, Briefcase, AlertTriangle, Building, Map, Globe, ChevronDown, Save } from 'lucide-react';
+import LoginScreen from './components/LoginScreen';
+import { Menu, Layers, Loader2, Search, MapPin, Briefcase, AlertTriangle, Building, Map, Globe, ChevronDown, Save, LogOut } from 'lucide-react';
 
 const REGIONS = [
     { label: 'Sudeste (SP, RJ, MG, ES)', value: 'SUDESTE' },
@@ -18,6 +19,8 @@ const STATES = [
 ];
 
 function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  
   const [niche, setNiche] = useState('');
   const [city, setCity] = useState('');
   const [selectedState, setSelectedState] = useState('SP');
@@ -34,6 +37,12 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   
   useEffect(() => {
+    // Verifica autenticação
+    const authStatus = localStorage.getItem('lead_app_auth');
+    if (authStatus === 'true') {
+        setIsAuthenticated(true);
+    }
+
     // Carrega histórico
     const savedHistory = localStorage.getItem('lead_search_history');
     if (savedHistory) {
@@ -67,6 +76,21 @@ function App() {
   useEffect(() => {
     localStorage.setItem('lead_saved_companies', JSON.stringify(savedLeads));
   }, [savedLeads]);
+
+  const handleLogin = (status: boolean) => {
+    if (status) {
+        setIsAuthenticated(true);
+        localStorage.setItem('lead_app_auth', 'true');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('lead_app_auth');
+    // Limpa dados sensíveis da memória ao sair, se desejar
+    setCurrentResults([]);
+    setViewMode('search');
+  };
 
   /**
    * Função para Salvar um Lead
@@ -207,6 +231,11 @@ function App() {
     }
   };
 
+  // --- RENDERIZAÇÃO CONDICIONAL (LOGIN OU APP) ---
+  if (!isAuthenticated) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-slate-100 font-sans">
       <HistorySidebar 
@@ -234,6 +263,15 @@ function App() {
               <h1 className="text-xl font-bold tracking-tight">Lead Enriched <span className="text-indigo-400 font-light">Pro</span></h1>
             </div>
           </div>
+
+          <button 
+            onClick={handleLogout}
+            className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"
+            title="Sair do sistema"
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="hidden sm:inline">Sair</span>
+          </button>
         </header>
 
         <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full scroll-smooth">
