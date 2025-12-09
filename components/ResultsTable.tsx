@@ -1,15 +1,18 @@
 import React from 'react';
 import { EnrichedCompany } from '../types';
-import { Download, Building2, Phone, Mail, MapPin, Users, DollarSign, CheckCircle2, Filter, FileSpreadsheet, FileText } from 'lucide-react';
+import { Download, Building2, Phone, Mail, MapPin, Users, DollarSign, CheckCircle2, Filter, FileSpreadsheet, FileText, PlusCircle, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 interface ResultsTableProps {
   data: EnrichedCompany[];
+  isSavedView?: boolean;
+  onSaveLead?: (lead: EnrichedCompany) => void;
+  onDeleteLead?: (cnpj: string) => void;
 }
 
-const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
+const ResultsTable: React.FC<ResultsTableProps> = ({ data, isSavedView = false, onSaveLead, onDeleteLead }) => {
   
   // Função para exportar Excel Bonito (.xlsx)
   const handleExportExcel = () => {
@@ -45,7 +48,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
 
     // 4. Salvar arquivo
     XLSX.utils.book_append_sheet(wb, ws, "Leads");
-    XLSX.writeFile(wb, `Leads_Enriched_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.writeFile(wb, `Leads_${isSavedView ? 'SALVOS' : 'BUSCA'}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   // Função para exportar PDF Profissional
@@ -56,7 +59,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
 
     // Título
     doc.setFontSize(18);
-    doc.text("Relatório de Prospecção - Lead Enriched Pro", 14, 20);
+    doc.text(`Relatório de Leads ${isSavedView ? 'SALVOS' : 'ENCONTRADOS'} - Lead Enriched Pro`, 14, 20);
     doc.setFontSize(10);
     doc.text(`Gerado em: ${new Date().toLocaleDateString('pt-BR')} | Total de Leads: ${data.length}`, 14, 28);
 
@@ -95,8 +98,12 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
         <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
             <Building2 className="w-8 h-8 opacity-40 text-slate-500" />
         </div>
-        <p className="font-medium text-slate-600">Aguardando Prospecção</p>
-        <p className="text-sm">Os leads qualificados (com email e telefone) aparecerão aqui.</p>
+        <p className="font-medium text-slate-600 uppercase tracking-wide text-xs">
+            {isSavedView ? "NENHUM LEAD SALVO AINDA" : "AGUARDANDO PROSPECÇÃO"}
+        </p>
+        <p className="text-sm">
+            {isSavedView ? "Adicione leads da busca para criar sua lista." : "Os leads qualificados aparecerão aqui."}
+        </p>
       </div>
     );
   }
@@ -105,22 +112,24 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-full animate-in fade-in duration-500">
       <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-50 gap-4">
         <div>
-           <h3 className="font-bold text-slate-800 flex items-center gap-2">
-             Resultados da Prospecção
-             <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full border border-green-200 flex items-center gap-1">
-               <Filter className="w-3 h-3" />
-               Filtrado: Email & Tel
-             </span>
+           <h3 className="font-bold text-slate-800 flex items-center gap-2 uppercase text-sm tracking-wide">
+             {isSavedView ? "Meus Leads Salvos" : "Resultados da Prospecção"}
+             {!isSavedView && (
+                <span className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full border border-green-200 flex items-center gap-1 normal-case">
+                  <Filter className="w-3 h-3" />
+                  Filtrado: Email & Tel
+                </span>
+             )}
            </h3>
-           <p className="text-xs text-slate-500 mt-1">
-              {data.length} leads enriquecidos encontrados na base oficial
+           <p className="text-xs text-slate-500 mt-1 uppercase">
+              {data.length} LEADS LISTADOS
            </p>
         </div>
         
         <div className="flex items-center gap-2">
             <button
             onClick={handleExportExcel}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors shadow-sm"
             title="Baixar Planilha Excel"
             >
             <FileSpreadsheet className="w-4 h-4" />
@@ -129,7 +138,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
             
             <button
             onClick={handleExportPDF}
-            className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+            className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors shadow-sm"
             title="Baixar Relatório PDF"
             >
             <FileText className="w-4 h-4" />
@@ -140,8 +149,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
 
       <div className="overflow-auto flex-1">
         <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-slate-600 sticky top-0 z-10 border-b border-slate-200">
+          <thead className="bg-slate-50 text-slate-600 sticky top-0 z-10 border-b border-slate-200 text-xs uppercase tracking-wider">
             <tr>
+              <th className="p-4 font-semibold whitespace-nowrap">Ação</th>
               <th className="p-4 font-semibold whitespace-nowrap">Status</th>
               <th className="p-4 font-semibold whitespace-nowrap">Empresa / CNPJ</th>
               <th className="p-4 font-semibold whitespace-nowrap">Dados Fiscais</th>
@@ -153,6 +163,26 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
             {data.map((company, index) => {
                 return (
                   <tr key={index} className="hover:bg-slate-50 transition-colors group">
+                    <td className="p-4 w-16">
+                        {isSavedView ? (
+                            <button 
+                                onClick={() => onDeleteLead && company.cnpj && onDeleteLead(company.cnpj)}
+                                className="bg-red-50 hover:bg-red-100 text-red-600 p-2 rounded-full transition-colors flex items-center justify-center shadow-sm border border-red-200"
+                                title="Remover da lista"
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        ) : (
+                            <button 
+                                onClick={() => onSaveLead && onSaveLead(company)}
+                                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 hover:text-indigo-700 p-2 rounded-full transition-colors flex items-center gap-2 shadow-sm border border-indigo-200 w-auto px-3"
+                                title="Salvar Lead (Mover para CRM)"
+                            >
+                                <PlusCircle className="w-4 h-4" />
+                                <span className="text-[10px] font-bold uppercase hidden md:inline">Salvar</span>
+                            </button>
+                        )}
+                    </td>
                     <td className="p-4 w-12 text-center">
                         <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center mx-auto" title="Contato Completo">
                             <CheckCircle2 className="w-5 h-5" />
@@ -160,14 +190,14 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                     </td>
                     <td className="p-4">
                       <div className="flex flex-col max-w-[250px]">
-                        <span className="font-bold text-slate-800 truncate" title={company.nome_fantasia}>{company.nome_fantasia}</span>
+                        <span className="font-bold text-slate-800 truncate uppercase text-xs" title={company.nome_fantasia}>{company.nome_fantasia}</span>
                         {company.cnpj ? (
                              <span className="text-xs text-slate-600 font-mono mt-0.5 bg-slate-100 px-1 rounded w-fit">{company.cnpj}</span>
                         ) : (
                              <span className="text-xs text-red-400 italic mt-0.5">Não localizado</span>
                         )}
-                        <span className="text-[10px] text-indigo-600 mt-1">{company.nicho}</span>
-                        <span className="text-[10px] text-slate-400 mt-1 truncate" title={company.cnae}>CNAE: {company.cnae}</span>
+                        <span className="text-[10px] text-indigo-600 mt-1 uppercase font-semibold">{company.nicho}</span>
+                        <span className="text-[10px] text-slate-400 mt-1 truncate uppercase" title={company.cnae}>CNAE: {company.cnae}</span>
                       </div>
                     </td>
                     <td className="p-4">
@@ -176,8 +206,8 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                             <DollarSign className="w-3.5 h-3.5 text-green-600" />
                             <span className="font-medium">{company.capital_social}</span>
                         </div>
-                        <span className="text-xs text-slate-500">Porte: {company.porte}</span>
-                        <span className="text-[10px] text-slate-400">Desde: {company.data_abertura}</span>
+                        <span className="text-xs text-slate-500 uppercase">PORTE: {company.porte}</span>
+                        <span className="text-[10px] text-slate-400 uppercase">DESDE: {company.data_abertura}</span>
                       </div>
                     </td>
                     <td className="p-4 max-w-xs">
@@ -186,10 +216,10 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                                 {company.socios.slice(0, 2).map((socio, idx) => (
                                     <div key={idx} className="flex items-center gap-1.5 text-xs text-slate-600">
                                         <Users className="w-3 h-3 text-slate-400" />
-                                        <span className="truncate">{socio.nome}</span>
+                                        <span className="truncate uppercase">{socio.nome}</span>
                                     </div>
                                 ))}
-                                {company.socios.length > 2 && <span className="text-[10px] text-slate-400">+{company.socios.length - 2} sócios</span>}
+                                {company.socios.length > 2 && <span className="text-[10px] text-slate-400 uppercase">+{company.socios.length - 2} sócios</span>}
                             </div>
                          ) : (
                              <span className="text-xs text-slate-400">---</span>
@@ -200,7 +230,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                         {company.contato.email && (
                           <div className="flex items-center gap-2 text-indigo-600 font-medium">
                             <Mail className="w-3.5 h-3.5" />
-                            <span className="truncate max-w-[150px] text-xs" title={company.contato.email}>{company.contato.email}</span>
+                            <span className="truncate max-w-[150px] text-xs lowercase" title={company.contato.email}>{company.contato.email}</span>
                           </div>
                         )}
                         {company.contato.telefone && (
@@ -211,7 +241,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                         )}
                          <div className="flex items-center gap-2 text-slate-500 mt-1">
                             <MapPin className="w-3.5 h-3.5" />
-                            <span className="text-[10px] truncate max-w-[150px]">{company.endereco.municipio}/{company.endereco.uf}</span>
+                            <span className="text-[10px] truncate max-w-[150px] uppercase">{company.endereco.municipio}/{company.endereco.uf}</span>
                           </div>
                       </div>
                     </td>
