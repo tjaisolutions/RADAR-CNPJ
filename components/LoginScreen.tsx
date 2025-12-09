@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Lock, User, LogIn, AlertCircle, Layers } from 'lucide-react';
+import { User as UserType } from '../types';
 
 interface LoginScreenProps {
-  onLogin: (status: boolean) => void;
+  onLogin: (user: UserType) => void;
 }
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
@@ -11,6 +12,31 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    // --- DATA MIGRATION & INITIALIZATION ---
+    // Verifica se já existe a lista de usuários nova
+    const usersData = localStorage.getItem('lead_app_users_v2');
+    
+    if (!usersData) {
+        // Se não existe, verifica se tinha o login antigo
+        const oldUser = localStorage.getItem('lead_app_user') || 'admin';
+        const oldPass = localStorage.getItem('lead_app_pass') || '123';
+        
+        // Cria a estrutura inicial com o usuário antigo ou o padrão
+        const initialUsers: UserType[] = [
+            { 
+                id: '1', 
+                username: oldUser, 
+                password: oldPass, 
+                role: 'admin',
+                createdAt: Date.now() 
+            }
+        ];
+        
+        localStorage.setItem('lead_app_users_v2', JSON.stringify(initialUsers));
+    }
+  }, []);
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -18,10 +44,20 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
 
     // Simulação de delay para sensação de segurança
     setTimeout(() => {
-      if (username === 'admin' && password === '123') {
-        onLogin(true);
-      } else {
-        setError('Usuário ou senha incorretos.');
+      try {
+        const usersData = localStorage.getItem('lead_app_users_v2');
+        const users: UserType[] = usersData ? JSON.parse(usersData) : [];
+
+        const foundUser = users.find(u => u.username === username && u.password === password);
+
+        if (foundUser) {
+          onLogin(foundUser);
+        } else {
+          setError('Usuário ou senha incorretos.');
+          setLoading(false);
+        }
+      } catch (e) {
+        setError('Erro ao processar dados de login.');
         setLoading(false);
       }
     }, 600);
